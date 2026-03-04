@@ -5,8 +5,8 @@
   "main": "index.html",
   "title": "Kinopub",
   "icon": "icon.png",
-  "miniicon": "icon-mini.png",
   "largeIcon": "icon-large.png",
+  "iconColor": "#000000",
   "splashBackground": "splashBackground.png",
   "uiRevision": 2,
   "disableBackHistoryAPI": true
