@@ -2,8 +2,10 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import VideoPlayer, { VideoPlayerBase, VideoPlayerBaseProps } from '@enact/moonstone/VideoPlayer';
 import Spotlight from '@enact/spotlight';
 
+import { Item, Season, Video } from 'api';
 import BackButton from 'components/backButton';
 import Button from 'components/button';
+import EpisodePicker from 'components/episodePicker';
 import Media, { AudioTrack, SourceTrack, StreamingType, SubtitleTrack } from 'components/media';
 import Text from 'components/text';
 import useButtonEffect from 'hooks/useButtonEffect';
@@ -22,10 +24,13 @@ export type PlayerProps = {
   startTime?: number;
   timeSyncInterval?: number;
   streamingType?: StreamingType;
+  item?: Item;
+  seasons?: Season[];
   onPlay?: () => void;
   onPause?: (currentTime: number) => void;
   onEnded?: (currentTime: number) => void;
   onTimeSync?: (currentTime: number) => void | Promise<void>;
+  onEpisodeSelect?: (episode: Video, season: Season) => void;
 } & VideoPlayerBaseProps;
 
 const Player: React.FC<PlayerProps> = ({
@@ -38,16 +43,20 @@ const Player: React.FC<PlayerProps> = ({
   startTime,
   timeSyncInterval = 30,
   streamingType,
+  item,
+  seasons,
   onPlay,
   onPause,
   onEnded,
   onTimeSync,
+  onEpisodeSelect,
   ...props
 }) => {
   const playerRef = useRef<VideoPlayerBase>();
   const [isPaused, setIsPaused] = useState(true);
   const [isLoaded, setIsLoaded] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isEpisodesOpen, setIsEpisodesOpen] = useState(false);
   const [isPauseByOKClickActive] = useStorageState<boolean>('is_pause_by_ok_click_active');
 
   const handlePlay = useCallback(() => {
@@ -107,6 +116,22 @@ const Player: React.FC<PlayerProps> = ({
       video.play();
     }
   }, []);
+  const handleEpisodesOpen = useCallback(() => {
+    if (playerRef.current && seasons?.length) {
+      setIsEpisodesOpen(true);
+
+      const video: any = playerRef.current.getVideoNode();
+      video.pause();
+    }
+  }, [playerRef, seasons]);
+  const handleEpisodesClose = useCallback(() => {
+    if (playerRef.current) {
+      setIsEpisodesOpen(false);
+
+      const video: any = playerRef.current.getVideoNode();
+      video.play();
+    }
+  }, []);
   const handlePauseButton = useCallback(() => {
     if (playerRef.current) {
       const video: any = playerRef.current.getVideoNode();
@@ -160,7 +185,25 @@ const Player: React.FC<PlayerProps> = ({
           <Text>{title}</Text>
         </div>
       )}
-      {isPaused && <Button className="absolute z-101 bottom-8 right-10 text-blue-600" icon="settings" onClick={handleSettingsOpen} />}
+      {isPaused && (
+        <div className="absolute z-101 bottom-8 right-10 flex items-center">
+          {seasons?.length && (
+            <Button className="text-purple-500 mr-2" icon="list" onClick={handleEpisodesOpen}>
+              Эпизоды
+            </Button>
+          )}
+          <Button className="text-blue-600" icon="settings" onClick={handleSettingsOpen} />
+        </div>
+      )}
+      {item && seasons?.length && (
+        <EpisodePicker
+          item={item}
+          seasons={seasons}
+          visible={isEpisodesOpen}
+          onClose={handleEpisodesClose}
+          onEpisodeSelect={onEpisodeSelect}
+        />
+      )}
       {isLoaded && startTime! > 0 && <StartFrom startTime={startTime} player={playerRef} />}
 
       <VideoPlayer

@@ -176,6 +176,14 @@ const VideoView: React.FC = () => {
     [setSavedSubtitleName],
   );
 
+  const handleEpisodeSelect = useCallback(
+    (episode: Video) => {
+      saveCurrentTime(currentVideo, 0);
+      setCurrentVideo(episode);
+    },
+    [saveCurrentTime, currentVideo],
+  );
+
   return (
     <>
       <Seo title={`Просмотр: ${item.title} - Видео`} />
@@ -184,11 +192,14 @@ const VideoView: React.FC = () => {
           key={currentVideo.id}
           {...playerProps}
           streamingType={streamingType}
+          item={item}
+          seasons={item.seasons}
           onPause={handlePause}
           onEnded={handleOnEnded}
           onJumpBackward={handleJumpBackward}
           onJumpForward={handleJumpForward}
           onTimeSync={handleTimeSync}
+          onEpisodeSelect={handleEpisodeSelect}
           // @ts-expect-error
           onAudioChange={handleAudioChange}
           onSourceChange={handleSourceChange}
