@@ -4,6 +4,7 @@ import map from 'lodash/map';
 
 import { Bool, Season, Video, WatchingStatus } from 'api';
 import Button from 'components/button';
+import EpisodePicker from 'components/episodePicker';
 import ItemsList from 'components/itemsList';
 import Link from 'components/link';
 import Popup from 'components/popup';
@@ -43,6 +44,7 @@ const ItemView: React.FC = () => {
   const { itemId } = useParams<RouteParams>();
   const posterRef = useRef<HTMLImageElement>(null);
   const [bookmarksPopupVisible, setBookmarksPopupVisible] = useState(false);
+  const [episodePickerVisible, setEpisodePickerVisible] = useState(false);
   const { data, refetch } = useApi('itemMedia', [itemId!], { staleTime: 0 });
 
   const { watchingToggleAsync } = useApiMutation('watchingToggle');
@@ -94,6 +96,12 @@ const ItemView: React.FC = () => {
   }, []);
   const handleBookmarksPopupClose = useCallback(() => {
     setBookmarksPopupVisible(false);
+  }, []);
+  const handleOnEpisodesClick = useCallback(() => {
+    setEpisodePickerVisible(true);
+  }, []);
+  const handleEpisodePickerClose = useCallback(() => {
+    setEpisodePickerVisible(false);
   }, []);
   const handleSeasonToggle = useCallback(
     async (season?: Season | null) => {
@@ -154,6 +162,12 @@ const ItemView: React.FC = () => {
                 Смотреть{isSerial ? ` s${videoToPlay.snumber}e${videoToPlay.number}` : ''}
               </Button>
 
+              {isSerial && data?.item?.seasons && (
+                <Button icon="list" onClick={handleOnEpisodesClick} className="text-purple-500">
+                  Эпизоды
+                </Button>
+              )}
+
               <Button icon="bookmark" onClick={handleOnBookmarksClick} className="text-yellow-600">
                 В закладки
               </Button>
@@ -161,6 +175,15 @@ const ItemView: React.FC = () => {
               <Popup visible={bookmarksPopupVisible} onClose={handleBookmarksPopupClose} closeButton="Yellow">
                 <Bookmarks key={`${itemId}-${bookmarksPopupVisible}`} itemId={itemId!} />
               </Popup>
+
+              {isSerial && data?.item?.seasons && (
+                <EpisodePicker
+                  item={data.item}
+                  seasons={data.item.seasons}
+                  visible={episodePickerVisible}
+                  onClose={handleEpisodePickerClose}
+                />
+              )}
 
               {trailer ? (
                 <Button icon="videocam" onClick={handleOnTrailerClick} className="text-green-600">
