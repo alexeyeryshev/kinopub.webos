@@ -46,13 +46,59 @@ const ItemView: React.FC = () => {
   const [bookmarksPopupVisible, setBookmarksPopupVisible] = useState(false);
   const [episodePickerVisible, setEpisodePickerVisible] = useState(false);
   const { data, refetch } = useApi('itemMedia', [itemId!], { staleTime: 0 });
+  const { data: watchingData, refetch: refetchWatching } = useApi('watchingItem', [itemId!], { staleTime: 0 });
 
   const { watchingToggleAsync } = useApiMutation('watchingToggle');
   const { watchingToggleWatchlistAsync } = useApiMutation('watchingToggleWatchlist');
   const { watchingMarkTimeAsync } = useApiMutation('watchingMarkTime');
 
+  // Merge watching data from /v1/watching into item data
+  // The watching API returns {status, time} at top level, not nested under "watching"
+  const itemWithWatching = useMemo(() => {
+    if (!data?.item) return data?.item;
+    if (!watchingData?.item) return data.item;
+
+    const item = { ...data.item };
+
+    if (item.seasons && watchingData.item.seasons) {
+      item.seasons = item.seasons.map((season) => {
+        const ws = watchingData.item.seasons?.find((s: any) => s.number === season.number);
+        if (!ws) return season;
+
+        return {
+          ...season,
+          watched: (ws as any).status ?? season.watched,
+          watching: { status: (ws as any).status ?? season.watching?.status, time: (ws as any).time ?? season.watching?.time },
+          episodes: season.episodes.map((episode) => {
+            const we = ws.episodes?.find((e: any) => e.number === episode.number);
+            if (!we) return episode;
+
+            return {
+              ...episode,
+              watched: (we as any).status ?? episode.watched,
+              watching: { status: (we as any).status ?? episode.watching?.status, time: (we as any).time ?? episode.watching?.time },
+            };
+          }),
+        };
+      });
+    } else if (item.videos && watchingData.item.videos) {
+      item.videos = item.videos.map((video) => {
+        const wv = watchingData.item.videos?.find((v: any) => v.number === video.number);
+        if (!wv) return video;
+
+        return {
+          ...video,
+          watched: (wv as any).status ?? video.watched,
+          watching: { status: (wv as any).status ?? video.watching?.status, time: (wv as any).time ?? video.watching?.time },
+        };
+      });
+    }
+
+    return item;
+  }, [data?.item, watchingData?.item]);
+
   const trailer = useMemo(() => data?.item.trailer, [data?.item]);
-  const [videoToPlay, season] = useMemo(() => getItemVideoToPlay(data?.item), [data?.item]);
+  const [videoToPlay, season] = useMemo(() => getItemVideoToPlay(itemWithWatching), [itemWithWatching]);
   const title = useMemo(() => getItemTitle(data?.item, videoToPlay, season), [data?.item, season, videoToPlay]);
   const durationAverage = useMemo(() => secondsToDuration(data?.item?.duration?.average), [data?.item]);
   const durationTotal = useMemo(() => secondsToDuration(data?.item?.duration?.total), [data?.item]);
@@ -65,17 +111,17 @@ const ItemView: React.FC = () => {
   );
 
   const handleOnPlayClick = useCallback(() => {
-    if (data?.item) {
+    if (itemWithWatching) {
       history.push(
         generatePath(PATHS.Video, {
-          itemId: data?.item.id,
+          itemId: itemWithWatching.id,
         }),
         {
-          item: data?.item,
+          item: itemWithWatching,
         },
       );
     }
-  }, [history, data?.item]);
+  }, [history, itemWithWatching]);
 
   const handleOnTrailerClick = useCallback(() => {
     if (trailer?.id) {
@@ -103,19 +149,23 @@ const ItemView: React.FC = () => {
   const handleEpisodePickerClose = useCallback(() => {
     setEpisodePickerVisible(false);
   }, []);
+  const refetchAll = useCallback(() => {
+    refetch();
+    refetchWatching();
+  }, [refetch, refetchWatching]);
   const handleSeasonToggle = useCallback(
     async (season?: Season | null) => {
       await watchingToggleAsync([itemId!, undefined, season?.number]);
-      refetch();
+      refetchAll();
     },
-    [itemId, refetch, watchingToggleAsync],
+    [itemId, refetchAll, watchingToggleAsync],
   );
   const handleEpisodeToggle = useCallback(
     async (episode: Video, season?: Season | null) => {
       await watchingToggleAsync([itemId!, episode.number, season?.number]);
-      refetch();
+      refetchAll();
     },
-    [itemId, refetch, watchingToggleAsync],
+    [itemId, refetchAll, watchingToggleAsync],
   );
 
   const handleOnVisibilityClick = useCallback(async () => {
@@ -128,8 +178,8 @@ const ItemView: React.FC = () => {
         await watchingMarkTimeAsync([itemId!, 30, videoToPlay.number]);
       }
     }
-    refetch();
-  }, [itemId, isSerial, isWatching, videoToPlay, watchingToggleWatchlistAsync, watchingToggleAsync, watchingMarkTimeAsync, refetch]);
+    refetchAll();
+  }, [itemId, isSerial, isWatching, videoToPlay, watchingToggleWatchlistAsync, watchingToggleAsync, watchingMarkTimeAsync, refetchAll]);
 
   useEffect(() => {
     requestAnimationFrame(() => {
@@ -176,10 +226,10 @@ const ItemView: React.FC = () => {
                 <Bookmarks key={`${itemId}-${bookmarksPopupVisible}`} itemId={itemId!} />
               </Popup>
 
-              {isSerial && data?.item?.seasons && (
+              {isSerial && itemWithWatching?.seasons && (
                 <EpisodePicker
-                  item={data.item}
-                  seasons={data.item.seasons}
+                  item={itemWithWatching}
+                  seasons={itemWithWatching.seasons}
                   visible={episodePickerVisible}
                   onClose={handleEpisodePickerClose}
                 />
@@ -308,8 +358,8 @@ const ItemView: React.FC = () => {
 
           <SeasonsList
             className="pb-6"
-            item={data?.item!}
-            seasons={data?.item?.seasons}
+            item={itemWithWatching!}
+            seasons={itemWithWatching?.seasons}
             onSeasonToggle={handleSeasonToggle}
             onEpisodeToggle={handleEpisodeToggle}
           />
