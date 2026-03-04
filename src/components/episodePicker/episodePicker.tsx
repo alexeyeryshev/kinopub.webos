@@ -18,9 +18,10 @@ type Props = {
   seasons: Season[];
   visible: boolean;
   onClose: () => void;
+  onEpisodeSelect?: (episode: Video, season: Season) => void;
 };
 
-const EpisodePicker: React.FC<Props> = ({ item, seasons, visible, onClose }) => {
+const EpisodePicker: React.FC<Props> = ({ item, seasons, visible, onClose, onEpisodeSelect }) => {
   const history = useHistory();
   const [selectedSeasonIdx, setSelectedSeasonIdx] = useState(0);
   const containerId = useMemo(() => Spotlight.add({}), []);
@@ -49,13 +50,18 @@ const EpisodePicker: React.FC<Props> = ({ item, seasons, visible, onClose }) => 
   const handleEpisodeClick = useCallback(
     (episode: Video) => () => {
       if (episode?.id) {
-        history.push(
-          generatePath(PATHS.Video, { itemId: item.id }, { episodeId: `${episode.number}`, seasonId: `${selectedSeason.number}` }),
-          { item },
-        );
+        if (onEpisodeSelect) {
+          onEpisodeSelect(episode, selectedSeason);
+          onClose();
+        } else {
+          history.push(
+            generatePath(PATHS.Video, { itemId: item.id }, { episodeId: `${episode.number}`, seasonId: `${selectedSeason.number}` }),
+            { item },
+          );
+        }
       }
     },
-    [item, selectedSeason, history],
+    [item, selectedSeason, history, onEpisodeSelect, onClose],
   );
 
   const spotContent = useCallback(() => {
