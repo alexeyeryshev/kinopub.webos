@@ -9,7 +9,7 @@ const readFile = util.promisify(fs.readFile);
 const writeFile = util.promisify(fs.writeFile);
 const rename = util.promisify(fs.rename);
 
-const APP_IDS = [pkg.name, 'netflix', 'amazon', 'ivi', 'youtube'];
+const APP_IDS = [pkg.name, 'netflix', 'amazon', 'ivi', 'youtube', 'ui30'];
 
 const buildDir = path.resolve(process.cwd(), 'build');
 const outDir = path.resolve(process.cwd(), 'out');
