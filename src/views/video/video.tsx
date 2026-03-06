@@ -65,6 +65,9 @@ const VideoView: React.FC = () => {
   const [savedAudioName, setSavedAudioName] = useStorageState<string>(`item_${item.id}_saved_audio_name`);
   const [savedSourceName, setSavedSourceName] = useStorageState<string>(`item_${item.id}_saved_source_name`);
   const [savedSubtitleName, setSavedSubtitleName] = useStorageState<string>(`item_${item.id}_saved_subtitle_name`);
+  const [defaultQuality] = useStorageState<string>('default_quality');
+  const [defaultAudioLang] = useStorageState<string>('default_audio_lang');
+  const [defaultSubtitleLang] = useStorageState<string>('default_subtitle_lang');
 
   const [currentVideo, setCurrentVideo] = useState(video);
   const [previousVideo, nextVideo] = usePrevNextVideos(item, currentVideo, season);
@@ -85,9 +88,9 @@ const VideoView: React.FC = () => {
             title: getItemTitle(item, currentVideo, season),
             description: getItemDescription(item, currentVideo, season),
             poster: item.posters.wide || item.posters.big,
-            audios: mapAudios(currentVideo.audios, isAC3ByDefaultActive, savedAudioName),
-            sources: mapSources(currentVideoLinks.data.files, streamingType, savedSourceName),
-            subtitles: mapSubtitles(currentVideoLinks.data.subtitles, isForcedByDefaultActive, savedSubtitleName),
+            audios: mapAudios(currentVideo.audios, isAC3ByDefaultActive, savedAudioName, defaultAudioLang),
+            sources: mapSources(currentVideoLinks.data.files, streamingType, savedSourceName, defaultQuality),
+            subtitles: mapSubtitles(currentVideoLinks.data.subtitles, isForcedByDefaultActive, savedSubtitleName, defaultSubtitleLang),
             startTime: currentVideo.watching.status === WatchingStatus.Watching ? currentVideo.watching.time : 0,
           } as PlayerProps)
         : null,
@@ -102,6 +105,9 @@ const VideoView: React.FC = () => {
       savedAudioName,
       savedSourceName,
       savedSubtitleName,
+      defaultQuality,
+      defaultAudioLang,
+      defaultSubtitleLang,
     ],
   );
 

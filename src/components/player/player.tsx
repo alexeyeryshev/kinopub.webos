@@ -58,6 +58,10 @@ const Player: React.FC<PlayerProps> = ({
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isEpisodesOpen, setIsEpisodesOpen] = useState(false);
   const [isPauseByOKClickActive] = useStorageState<boolean>('is_pause_by_ok_click_active');
+  const [currentSourceName, setCurrentSourceName] = useState<string | null>(null);
+
+  const activeSource = sources?.find((s) => s.name === currentSourceName) || sources?.find((s) => s.default) || sources?.[0];
+  const isHDR = activeSource?.codec?.toLowerCase().includes('hevc') || activeSource?.name?.toLowerCase().includes('hdr');
 
   const handlePlay = useCallback(() => {
     setIsPaused(false);
@@ -113,6 +117,7 @@ const Player: React.FC<PlayerProps> = ({
       setIsSettingsOpen(false);
 
       const video: any = playerRef.current.getVideoNode();
+      setCurrentSourceName(video.sourceTrack || null);
       video.play();
     }
   }, []);
@@ -183,6 +188,7 @@ const Player: React.FC<PlayerProps> = ({
         <div className="absolute z-10 top-0 px-4 pt-2 flex items-center">
           <BackButton className="mr-2" />
           <Text>{title}</Text>
+          {isHDR && <Text className="ml-3 px-2 py-0 text-xs font-bold rounded bg-yellow-600 text-black">HDR</Text>}
         </div>
       )}
       {isPaused && (

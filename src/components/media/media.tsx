@@ -13,6 +13,7 @@ export type AudioTrack = {
 export type SourceTrack = {
   src: string;
   name: string;
+  codec?: string;
 };
 
 export type SubtitleTrack = {
