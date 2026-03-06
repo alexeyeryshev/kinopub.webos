@@ -111,7 +111,7 @@ const ContinueWatching: React.FC = () => {
           <VideoItem key={item.id} item={item} />
         ))}
         <Spottable className="rounded-xl w-1/5 cursor-pointer" onClick={handleShowAll}>
-          <div className="h-72 m-1 flex flex-col items-center justify-center rounded-xl border-2 border-gray-300 bg-gray-300">
+          <div className="h-72 m-1 flex flex-col items-center justify-center rounded-xl border-2 border-gray-700 bg-black bg-opacity-50">
             <Text className="text-4xl text-gray-200 mb-2">▶</Text>
             <Text className="text-gray-200 text-sm">Продолжить просмотр</Text>
           </div>
