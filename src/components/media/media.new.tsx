@@ -19,6 +19,7 @@ export type SourceTrack = {
   src: string;
   type: string;
   name: string;
+  codec?: string;
   default?: boolean;
 };
 

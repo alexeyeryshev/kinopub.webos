@@ -49,6 +49,9 @@ const SettingsView: React.FC = () => {
   const [isAC3ByDefaultActive, setIsAC3ByDefaultActive] = useStorageState<boolean>('is_ac3_by_default_active');
   const [isForcedByDefaultActive, setIsForcedByDefaultActive] = useStorageState<boolean>('is_forced_by_default_active');
   const [isPauseByOKClickActive, setIsPauseByOKClickActive] = useStorageState<boolean>('is_pause_by_ok_click_active');
+  const [defaultQuality, setDefaultQuality] = useStorageState<string>('default_quality');
+  const [defaultAudioLang, setDefaultAudioLang] = useStorageState<string>('default_audio_lang');
+  const [defaultSubtitleLang, setDefaultSubtitleLang] = useStorageState<string>('default_subtitle_lang');
   const { software, hardware } = useDeviceInfo();
 
   const boolSettings = useMemo(
@@ -95,6 +98,45 @@ const SettingsView: React.FC = () => {
     },
     [setIsPauseByOKClickActive],
   );
+
+  const qualityOptions = useMemo(
+    () => [
+      { title: 'Лучшее доступное', value: 'best' },
+      { title: '2160p (4K)', value: '2160p' },
+      { title: '1080p', value: '1080p' },
+      { title: '720p', value: '720p' },
+      { title: '480p', value: '480p' },
+    ],
+    [],
+  );
+  const handleDefaultQualityChange = useCallback(
+    (value: string) => {
+      setDefaultQuality(value);
+    },
+    [setDefaultQuality],
+  );
+
+  const audioLangOptions = useMemo(
+    () => [
+      { title: 'Не выбран', value: '' },
+      { title: 'Русский', value: 'rus' },
+      { title: 'Английский', value: 'eng' },
+      { title: 'Украинский', value: 'ukr' },
+    ],
+    [],
+  );
+  const handleDefaultAudioLangChange = useCallback((value: string) => setDefaultAudioLang(value), [setDefaultAudioLang]);
+
+  const subtitleLangOptions = useMemo(
+    () => [
+      { title: 'Выключены', value: '' },
+      { title: 'Русский', value: 'rus' },
+      { title: 'Английский', value: 'eng' },
+      { title: 'Украинский', value: 'ukr' },
+    ],
+    [],
+  );
+  const handleDefaultSubtitleLangChange = useCallback((value: string) => setDefaultSubtitleLang(value), [setDefaultSubtitleLang]);
 
   const handleBoolSettingToggle = useCallback(
     (setting: typeof boolSettings[0]) => async (checked: boolean) => {
@@ -155,6 +197,32 @@ const SettingsView: React.FC = () => {
                     <Checkbox className="w-full" defaultChecked={isForcedByDefaultActive} onChange={handleForcedByDefaultToogle}>
                       Forced субтитры по умолчанию
                     </Checkbox>
+                  </div>
+                </div>
+                <div className="flex flex-wrap pb-4">
+                  <div className="flex w-1/2 pr-4">
+                    <Select
+                      label="Качество по умолчанию"
+                      value={defaultQuality || 'best'}
+                      options={qualityOptions}
+                      onChange={handleDefaultQualityChange}
+                    />
+                  </div>
+                  <div className="flex w-1/2 pr-4">
+                    <Select
+                      label="Язык аудио по умолчанию"
+                      value={defaultAudioLang || ''}
+                      options={audioLangOptions}
+                      onChange={handleDefaultAudioLangChange}
+                    />
+                  </div>
+                  <div className="flex w-1/2 pr-4">
+                    <Select
+                      label="Субтитры по умолчанию"
+                      value={defaultSubtitleLang || ''}
+                      options={subtitleLangOptions}
+                      onChange={handleDefaultSubtitleLangChange}
+                    />
                   </div>
                 </div>
                 <div className="flex flex-wrap pb-4" key={`list-${deviceInfo?.device.updated}`}>

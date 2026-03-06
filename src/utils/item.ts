@@ -17,38 +17,46 @@ export function getItemVideoToPlay(item?: ItemDetails, episodeId?: string, seaso
       season = item.seasons[0];
       episode = season?.episodes.find(({ number }) => +episodeId === +number) || season?.episodes[0];
     } else {
-      // Find the last watched episode across all seasons, then return the next one
-      let lastWatchedSeason: Season | undefined;
-      let lastWatchedEpisodeIdx = -1;
+      // Find the latest season with any activity, then pick the next episode
+      // after the highest-numbered episode that has been watched or started.
+      let activeSeason: Season | undefined;
+      let lastActiveIdx = -1;
 
       for (const s of item.seasons) {
-        for (let i = 0; i < s.episodes.length; i++) {
-          if (s.episodes[i].watching.status === WatchingStatus.Watched) {
-            lastWatchedSeason = s;
-            lastWatchedEpisodeIdx = i;
+        for (let i = s.episodes.length - 1; i >= 0; i--) {
+          if (s.episodes[i].watching?.status !== WatchingStatus.NoWatched) {
+            if (!activeSeason || s.number > activeSeason.number) {
+              activeSeason = s;
+              lastActiveIdx = i;
+            }
+            break;
           }
         }
       }
 
-      if (lastWatchedSeason && lastWatchedEpisodeIdx >= 0) {
-        // Try next episode in the same season
-        if (lastWatchedEpisodeIdx + 1 < lastWatchedSeason.episodes.length) {
-          season = lastWatchedSeason;
-          episode = lastWatchedSeason.episodes[lastWatchedEpisodeIdx + 1];
-        } else {
-          // Try first episode of the next season
-          const nextSeason = item.seasons.find(({ number }) => number === lastWatchedSeason!.number + 1);
-          if (nextSeason) {
-            season = nextSeason;
-            episode = nextSeason.episodes[0];
+      if (activeSeason && lastActiveIdx >= 0) {
+        const lastActive = activeSeason.episodes[lastActiveIdx];
+        if (lastActive.watching?.status === WatchingStatus.Watched) {
+          // Last active episode fully watched — suggest next one
+          if (lastActiveIdx + 1 < activeSeason.episodes.length) {
+            season = activeSeason;
+            episode = activeSeason.episodes[lastActiveIdx + 1];
           } else {
-            // All watched, fall back to last episode
-            season = lastWatchedSeason;
-            episode = lastWatchedSeason.episodes[lastWatchedEpisodeIdx];
+            const nextSeason = item.seasons.find(({ number }) => number === activeSeason!.number + 1);
+            if (nextSeason) {
+              season = nextSeason;
+              episode = nextSeason.episodes[0];
+            } else {
+              season = activeSeason;
+              episode = lastActive;
+            }
           }
+        } else {
+          // In-progress — resume this episode
+          season = activeSeason;
+          episode = lastActive;
         }
       } else {
-        // Nothing watched yet, start from the beginning
         season = item.seasons[0];
         episode = season?.episodes[0];
       }

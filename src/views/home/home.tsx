@@ -1,11 +1,14 @@
 import { useMemo } from 'react';
 import dayjs from 'dayjs';
+import map from 'lodash/map';
 
-import { ItemsParams } from 'api';
+import { Item, ItemsParams } from 'api';
 import ItemsList from 'components/itemsList';
 import Link from 'components/link';
 import Scrollable from 'components/scrollable';
 import Seo from 'components/seo';
+import Title from 'components/title';
+import VideoItem from 'components/videoItem';
 import useApi from 'hooks/useApi';
 import { PATHS, generatePath } from 'routes';
 
@@ -64,26 +67,79 @@ const NewTVShows: React.FC = () => {
   return <ItemsSection title="Новые ТВ шоу" params={{ type: 'tvshow', sort: 'created-' }} />;
 };
 
+const ContinueWatching: React.FC = () => {
+  const { data: serials, isLoading: serialsLoading } = useApi('watchingSerials');
+  const { data: movies, isLoading: moviesLoading } = useApi('watchingMovies');
+  const { data: historyData, isLoading: historyLoading } = useApi('history', [0, 100]);
+
+  const items = useMemo(() => {
+    const watchingItems = [...(serials?.items || []), ...(movies?.items || [])];
+    if (!watchingItems.length) return [];
+
+    const watchingIds = new Set(watchingItems.map((i) => i.id));
+
+    // Build order from history: most recently watched first, deduplicated
+    const seen = new Set<string>();
+    const ordered: Item[] = [];
+
+    for (const h of historyData?.history || []) {
+      const id = h.item?.id;
+      if (id && watchingIds.has(id) && !seen.has(id)) {
+        seen.add(id);
+        // Use history item (has full data with ratings/quality) over minimal watching item
+        ordered.push(h.item);
+      }
+    }
+
+    // Append any watching items not found in history
+    for (const item of watchingItems) {
+      if (!seen.has(item.id)) ordered.push(item);
+    }
+
+    return ordered.slice(0, 20).map((item) => ({ ...item, new: undefined }));
+  }, [serials?.items, movies?.items, historyData?.history]);
+  const isLoading = serialsLoading || moviesLoading || historyLoading;
+
+  if (!isLoading && items.length === 0) return null;
+
+  return (
+    <div className="pb-2">
+      <Title className="ml-0">
+        <Link href={generatePath(PATHS.Watching, { watchingType: 'serials' })} className="w-full">
+          Продолжить просмотр
+        </Link>
+      </Title>
+      <div className="flex flex-nowrap overflow-x-auto">
+        {map(items, (item) => (
+          <VideoItem key={item.id} item={item} wrapperClassName="flex-shrink-0" />
+        ))}
+      </div>
+    </div>
+  );
+};
+
 const HomeView: React.FC = () => {
   return (
     <>
       <Seo title="Главная" />
       <Scrollable>
-        <PopularMovies />
-
-        <NewMovies />
+        <ContinueWatching />
 
         <PopularSerials />
 
         <NewSerials />
 
-        <NewConcerts />
+        <PopularMovies />
 
-        <NewDocuMovies />
+        <NewMovies />
 
         <NewDocuSerials />
 
+        <NewDocuMovies />
+
         <NewTVShows />
+
+        <NewConcerts />
       </Scrollable>
     </>
   );
