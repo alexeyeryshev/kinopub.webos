@@ -1,4 +1,5 @@
-import { useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
+import { useHistory } from 'react-router-dom';
 import dayjs from 'dayjs';
 
 import { Item, ItemsParams } from 'api';
@@ -6,6 +7,9 @@ import ItemsList from 'components/itemsList';
 import Link from 'components/link';
 import Scrollable from 'components/scrollable';
 import Seo from 'components/seo';
+import Spottable from 'components/spottable';
+import Text from 'components/text';
+import VideoItem from 'components/videoItem';
 import useApi from 'hooks/useApi';
 import { PATHS, generatePath } from 'routes';
 
@@ -65,6 +69,7 @@ const NewTVShows: React.FC = () => {
 };
 
 const ContinueWatching: React.FC = () => {
+  const history = useHistory();
   const { data: serials, isLoading: serialsLoading } = useApi('watchingSerials');
   const { data: movies, isLoading: moviesLoading } = useApi('watchingMovies');
   const { data: historyData, isLoading: historyLoading } = useApi('history', [0, 100]);
@@ -74,7 +79,6 @@ const ContinueWatching: React.FC = () => {
 
     const watchingIds = new Set(watchingItems.map((i) => i.id));
 
-    // Build order from history: most recently watched first, deduplicated
     const seen = new Set<string>();
     const ordered: Item[] = [];
 
@@ -82,35 +86,37 @@ const ContinueWatching: React.FC = () => {
       const id = h.item?.id;
       if (id && watchingIds.has(id) && !seen.has(id)) {
         seen.add(id);
-        // Use history item (has full data with ratings/quality) over minimal watching item
         ordered.push(h.item);
       }
     }
 
-    // Append any watching items not found in history
     for (const item of watchingItems) {
       if (!seen.has(item.id)) ordered.push(item);
     }
 
-    return ordered.slice(0, 5).map((item) => ({ ...item, new: undefined }));
+    return ordered.slice(0, 4).map((item) => ({ ...item, new: undefined }));
   }, [serials?.items, movies?.items, historyData?.history]);
   const isLoading = serialsLoading || moviesLoading || historyLoading;
+
+  const handleShowAll = useCallback(() => {
+    history.push(generatePath(PATHS.Watching, { watchingType: 'serials' }));
+  }, [history]);
 
   if (!isLoading && items.length === 0) return null;
 
   return (
     <div className="pb-2">
-      <ItemsList
-        title={
-          <Link href={generatePath(PATHS.Watching, { watchingType: 'serials' })} className="w-full">
-            Продолжить просмотр
-          </Link>
-        }
-        titleClassName="ml-0"
-        items={items}
-        loading={isLoading}
-        scrollable={false}
-      />
+      <div className="flex flex-wrap">
+        {items.map((item) => (
+          <VideoItem key={item.id} item={item} />
+        ))}
+        <Spottable className="rounded-xl w-1/5 cursor-pointer" onClick={handleShowAll}>
+          <div className="h-72 m-1 flex flex-col items-center justify-center rounded-xl border-2 border-gray-300 bg-gray-300">
+            <Text className="text-4xl text-gray-200 mb-2">▶</Text>
+            <Text className="text-gray-200 text-sm">Продолжить просмотр</Text>
+          </div>
+        </Spottable>
+      </div>
     </div>
   );
 };
