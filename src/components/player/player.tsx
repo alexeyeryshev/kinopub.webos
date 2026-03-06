@@ -58,6 +58,7 @@ const Player: React.FC<PlayerProps> = ({
   const [isLoaded, setIsLoaded] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isEpisodesOpen, setIsEpisodesOpen] = useState(false);
+  const [controlsVisible, setControlsVisible] = useState(true);
   const [isPauseByOKClickActive] = useStorageState<boolean>('is_pause_by_ok_click_active');
   const [currentSourceName, setCurrentSourceName] = useState<string | null>(null);
 
@@ -139,6 +140,9 @@ const Player: React.FC<PlayerProps> = ({
       video.play();
     }
   }, []);
+  const handleControlsAvailable = useCallback((e: { available: boolean }) => {
+    setControlsVisible(e.available);
+  }, []);
   const handlePauseButton = useCallback(() => {
     if (playerRef.current) {
       const video: any = playerRef.current.getVideoNode();
@@ -170,20 +174,24 @@ const Player: React.FC<PlayerProps> = ({
   return (
     <>
       <Settings visible={isSettingsOpen} onClose={handleSettingsClose} player={playerRef} />
-      <div className="absolute z-10 top-0 px-4 pt-2 flex items-center">
-        <BackButton className="mr-2" />
-        <Text>{title}</Text>
-        {activeSource && <Text className="ml-3 px-2 py-0 text-xs font-bold rounded bg-gray-600 text-white">{activeSource.name}</Text>}
-        {isHDR && <Text className="ml-3 px-2 py-0 text-xs font-bold rounded bg-yellow-600 text-black">HDR</Text>}
-      </div>
-      <div className="absolute z-101 bottom-8 right-10 flex items-center">
-        {seasons?.length && (
-          <Button className="text-purple-500 mr-2" icon="list" onClick={handleEpisodesOpen}>
-            Эпизоды
-          </Button>
-        )}
-        <Button className="text-blue-600" icon="settings" onClick={handleSettingsOpen} />
-      </div>
+      {controlsVisible && (
+        <div className="absolute z-10 top-0 px-4 pt-2 flex items-center">
+          <BackButton className="mr-2" />
+          <Text>{title}</Text>
+          {activeSource && <Text className="ml-3 px-2 py-0 text-xs font-bold rounded bg-gray-600 text-white">{activeSource.name}</Text>}
+          {isHDR && <Text className="ml-3 px-2 py-0 text-xs font-bold rounded bg-yellow-600 text-black">HDR</Text>}
+        </div>
+      )}
+      {controlsVisible && (
+        <div className="absolute z-101 bottom-8 right-10 flex items-center">
+          {seasons?.length && (
+            <Button className="text-purple-500 mr-2" icon="list" onClick={handleEpisodesOpen}>
+              Эпизоды
+            </Button>
+          )}
+          <Button className="text-blue-600" icon="settings" onClick={handleSettingsOpen} />
+        </div>
+      )}
       {item && seasons?.length && (
         <EpisodePicker
           item={item}
@@ -208,6 +216,7 @@ const Player: React.FC<PlayerProps> = ({
         onPause={handlePause}
         onEnded={handleEnded}
         onLoadedMetadata={handleLoadedMetadata}
+        onControlsAvailable={handleControlsAvailable}
         streamingType={streamingType}
         isSettingsOpen={isSettingsOpen}
         audioTracks={audios}
