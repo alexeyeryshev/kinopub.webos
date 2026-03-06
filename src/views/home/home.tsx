@@ -14,7 +14,7 @@ import useApi from 'hooks/useApi';
 import { PATHS, generatePath } from 'routes';
 
 const ItemsSection: React.FC<{ title: string; params: ItemsParams }> = ({ title, params }) => {
-  const { data, isLoading } = useApi('items', [params, 0, 10]);
+  const { data, isLoading } = useApi('items', [params, 0, 5]);
   const href = useMemo(() => generatePath(PATHS.Category, { categoryType: params.type }), [params]);
 
   return (
@@ -105,7 +105,7 @@ const ContinueWatching: React.FC = () => {
   if (!isLoading && items.length === 0) return null;
 
   return (
-    <div className="pb-2">
+    <div className="pb-2 pt-4">
       <div className="flex flex-wrap">
         {items.map((item) => (
           <VideoItem key={item.id} item={item} />
