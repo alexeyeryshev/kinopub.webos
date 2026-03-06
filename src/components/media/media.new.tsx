@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useImperativeHandle, useMemo, useRef, us
 import cx from 'classnames';
 import HLS from 'hls.js';
 import forEach from 'lodash/forEach';
-import uniqBy from 'lodash/uniqBy';
 
 import useStorageState from 'hooks/useStorageState';
 
@@ -91,6 +90,8 @@ function useVideoPlayer({
   const [currentSourceTrack, setCurrentSourceTrack] = useState<SourceTrack>(
     () => (sourceTracks?.find((sourceTrack) => sourceTrack.default) || sourceTracks?.[0])!,
   );
+  const currentSourceTrackRef = useRef(currentSourceTrack);
+  currentSourceTrackRef.current = currentSourceTrack;
   const [currentSubtitleTrack, setCurrentSubtitleTrack] = useState<SubtitleTrack | null>(
     () => subtitleTracks?.find((subtitleTrack) => subtitleTrack.default) || null,
   );
@@ -108,7 +109,7 @@ function useVideoPlayer({
     },
     [audioTracks, onAudioChange],
   );
-  const getSourceTracks = useCallback(() => uniqBy(sourceTracks, 'src'), [sourceTracks]);
+  const getSourceTracks = useCallback(() => sourceTracks, [sourceTracks]);
   const getSourceTrack = useCallback(() => currentSourceTrack?.name, [currentSourceTrack]);
   const setSourceTrack = useCallback(
     (sourceTrackName: string) => {
@@ -117,6 +118,17 @@ function useVideoPlayer({
         const sourceTrack = sourceTracks![sourceTrackIndex];
         setCurrentSourceTrack(sourceTrack);
         onSourceChange?.(sourceTrack);
+
+        // For adaptive HLS (e.g. hls4): switch quality via HLS.js level
+        if (hlsRef.current && hlsRef.current.levels.length > 1) {
+          const targetHeight = parseInt(sourceTrack.name);
+          if (!isNaN(targetHeight)) {
+            const levelIndex = hlsRef.current.levels.findIndex((l) => l.height === targetHeight);
+            if (levelIndex !== -1) {
+              hlsRef.current.currentLevel = levelIndex;
+            }
+          }
+        }
       }
     },
     [sourceTracks, onSourceChange],
@@ -175,6 +187,15 @@ function useVideoPlayer({
         hls.attachMedia(videoRef.current);
         hls.on(HLS.Events.MEDIA_ATTACHED, () => {
           hls.loadSource(currentSrc);
+        });
+        hls.on(HLS.Events.MANIFEST_PARSED, () => {
+          const targetHeight = parseInt(currentSourceTrackRef.current?.name || '');
+          if (!isNaN(targetHeight) && hls.levels.length > 1) {
+            const levelIndex = hls.levels.findIndex((l) => l.height === targetHeight);
+            if (levelIndex !== -1) {
+              hls.currentLevel = levelIndex;
+            }
+          }
         });
       } else {
         videoRef.current.src = currentSrc;

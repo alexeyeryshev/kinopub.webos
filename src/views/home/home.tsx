@@ -1,14 +1,11 @@
 import { useMemo } from 'react';
 import dayjs from 'dayjs';
-import map from 'lodash/map';
 
 import { Item, ItemsParams } from 'api';
 import ItemsList from 'components/itemsList';
 import Link from 'components/link';
 import Scrollable from 'components/scrollable';
 import Seo from 'components/seo';
-import Title from 'components/title';
-import VideoItem from 'components/videoItem';
 import useApi from 'hooks/useApi';
 import { PATHS, generatePath } from 'routes';
 
@@ -71,7 +68,6 @@ const ContinueWatching: React.FC = () => {
   const { data: serials, isLoading: serialsLoading } = useApi('watchingSerials');
   const { data: movies, isLoading: moviesLoading } = useApi('watchingMovies');
   const { data: historyData, isLoading: historyLoading } = useApi('history', [0, 100]);
-
   const items = useMemo(() => {
     const watchingItems = [...(serials?.items || []), ...(movies?.items || [])];
     if (!watchingItems.length) return [];
@@ -96,7 +92,7 @@ const ContinueWatching: React.FC = () => {
       if (!seen.has(item.id)) ordered.push(item);
     }
 
-    return ordered.slice(0, 20).map((item) => ({ ...item, new: undefined }));
+    return ordered.slice(0, 5).map((item) => ({ ...item, new: undefined }));
   }, [serials?.items, movies?.items, historyData?.history]);
   const isLoading = serialsLoading || moviesLoading || historyLoading;
 
@@ -104,16 +100,17 @@ const ContinueWatching: React.FC = () => {
 
   return (
     <div className="pb-2">
-      <Title className="ml-0">
-        <Link href={generatePath(PATHS.Watching, { watchingType: 'serials' })} className="w-full">
-          Продолжить просмотр
-        </Link>
-      </Title>
-      <div className="flex flex-nowrap overflow-x-auto">
-        {map(items, (item) => (
-          <VideoItem key={item.id} item={item} wrapperClassName="flex-shrink-0" />
-        ))}
-      </div>
+      <ItemsList
+        title={
+          <Link href={generatePath(PATHS.Watching, { watchingType: 'serials' })} className="w-full">
+            Продолжить просмотр
+          </Link>
+        }
+        titleClassName="ml-0"
+        items={items}
+        loading={isLoading}
+        scrollable={false}
+      />
     </div>
   );
 };

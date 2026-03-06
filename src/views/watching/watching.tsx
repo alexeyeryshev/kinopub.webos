@@ -4,7 +4,7 @@ import capitalize from 'lodash/capitalize';
 import map from 'lodash/map';
 import sumBy from 'lodash/sumBy';
 
-import { Bool } from 'api';
+import { Item } from 'api';
 import ItemsList from 'components/itemsList';
 import Link from 'components/link';
 import Seo from 'components/seo';
@@ -21,8 +21,32 @@ type WatchingTypes = keyof typeof WATCHING_TYPES_MAP;
 
 const WatchingView: React.FC = () => {
   const { watchingType = 'serials' } = useParams<RouteParams>();
-  const { data, isLoading } = useApi(`watching${capitalize(watchingType) as Capitalize<WatchingTypes>}`, [Bool.True]);
+  const { data, isLoading } = useApi(`watching${capitalize(watchingType) as Capitalize<WatchingTypes>}`);
+  const { data: historyData } = useApi('history', [0, 100]);
   const total = useMemo(() => sumBy(data?.items, (item) => +(item.new || 0)), [data?.items]);
+  const sortedItems = useMemo(() => {
+    const items = data?.items;
+    if (!items?.length) return items;
+
+    const watchingIds = new Set(items.map((i) => i.id));
+    const seen = new Set<string>();
+    const ordered: Item[] = [];
+
+    for (const h of historyData?.history || []) {
+      const id = h.item?.id;
+      if (id && watchingIds.has(id) && !seen.has(id)) {
+        seen.add(id);
+        ordered.push(items.find((i) => i.id === id)!);
+      }
+    }
+
+    for (const item of items) {
+      if (!seen.has(item.id)) ordered.push(item);
+    }
+
+    return ordered;
+  }, [data?.items, historyData?.history]);
+
   const seoTitle = watchingType === 'serials' ? 'Новые эпизоды' : 'Недосмотренные фильмы';
   const title = total ? `${seoTitle} (${total})` : seoTitle;
 
@@ -49,7 +73,7 @@ const WatchingView: React.FC = () => {
             </div>
           </>
         }
-        items={data?.items}
+        items={sortedItems}
         loading={isLoading}
       />
     </>

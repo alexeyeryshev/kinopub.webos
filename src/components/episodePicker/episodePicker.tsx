@@ -17,14 +17,16 @@ type Props = {
   item: Item;
   seasons: Season[];
   visible: boolean;
+  currentSeasonNumber?: number;
   onClose: () => void;
   onEpisodeSelect?: (episode: Video, season: Season) => void;
 };
 
-const EpisodePicker: React.FC<Props> = ({ item, seasons, visible, onClose, onEpisodeSelect }) => {
+const EpisodePicker: React.FC<Props> = ({ item, seasons, visible, onClose, onEpisodeSelect, currentSeasonNumber }) => {
   const history = useHistory();
   const [selectedSeasonIdx, setSelectedSeasonIdx] = useState(0);
   const containerId = useMemo(() => Spotlight.add({}), []);
+  const seasonSpotlightIds = useMemo(() => seasons.map((_, idx) => `${containerId}-season-${idx}`), [containerId, seasons]);
 
   const selectedSeason = seasons[selectedSeasonIdx];
   const episodes = selectedSeason?.episodes || [];
@@ -64,20 +66,24 @@ const EpisodePicker: React.FC<Props> = ({ item, seasons, visible, onClose, onEpi
     [item, selectedSeason, history, onEpisodeSelect, onClose],
   );
 
-  const spotContent = useCallback(() => {
-    if (!Spotlight.focus(containerId)) {
-      const current = Spotlight.getCurrent();
-      if (current) {
-        // @ts-expect-error
-        current.blur();
+  const spotContent = useCallback(
+    (targetId?: string) => {
+      const focusTarget = targetId || containerId;
+      if (!Spotlight.focus(focusTarget)) {
+        const current = Spotlight.getCurrent();
+        if (current) {
+          // @ts-expect-error
+          current.blur();
+        }
+        Spotlight.setActiveContainer(containerId);
+        setTimeout(() => {
+          Spotlight.setPointerMode(false);
+          Spotlight.focus(focusTarget);
+        }, 500);
       }
-      Spotlight.setActiveContainer(containerId);
-      setTimeout(() => {
-        Spotlight.setPointerMode(false);
-        Spotlight.focus(containerId);
-      }, 500);
-    }
-  }, [containerId]);
+    },
+    [containerId],
+  );
 
   const scrollActiveElementIntoView = useCallback(() => {
     const current = Spotlight.getCurrent();
@@ -94,12 +100,18 @@ const EpisodePicker: React.FC<Props> = ({ item, seasons, visible, onClose, onEpi
 
   useEffect(() => {
     if (visible) {
-      spotContent();
+      let targetIdx = 0;
+      if (currentSeasonNumber) {
+        const idx = seasons.findIndex((s) => s.number === currentSeasonNumber);
+        if (idx >= 0) targetIdx = idx;
+      }
+      setSelectedSeasonIdx(targetIdx);
+      spotContent(seasonSpotlightIds[targetIdx]);
       hashTrigger.open();
     } else {
       hashTrigger.close();
     }
-  }, [visible, spotContent, hashTrigger]);
+  }, [visible, currentSeasonNumber, seasons, seasonSpotlightIds, spotContent, hashTrigger]);
 
   return (
     <>
@@ -124,6 +136,7 @@ const EpisodePicker: React.FC<Props> = ({ item, seasons, visible, onClose, onEpi
             {seasons.map((season, idx) => (
               <Spottable
                 key={season.id}
+                spotlightId={seasonSpotlightIds[idx]}
                 className={cx(
                   'px-3 py-2 rounded cursor-pointer whitespace-nowrap text-sm',
                   idx === selectedSeasonIdx ? 'bg-white bg-opacity-20 text-white' : 'text-gray-400',
