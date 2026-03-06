@@ -26,6 +26,7 @@ export type PlayerProps = {
   streamingType?: StreamingType;
   item?: Item;
   seasons?: Season[];
+  currentSeasonNumber?: number;
   onPlay?: () => void;
   onPause?: (currentTime: number) => void;
   onEnded?: (currentTime: number) => void;
@@ -45,6 +46,7 @@ const Player: React.FC<PlayerProps> = ({
   streamingType,
   item,
   seasons,
+  currentSeasonNumber,
   onPlay,
   onPause,
   onEnded,
@@ -53,7 +55,6 @@ const Player: React.FC<PlayerProps> = ({
   ...props
 }) => {
   const playerRef = useRef<VideoPlayerBase>();
-  const [isPaused, setIsPaused] = useState(true);
   const [isLoaded, setIsLoaded] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isEpisodesOpen, setIsEpisodesOpen] = useState(false);
@@ -61,16 +62,17 @@ const Player: React.FC<PlayerProps> = ({
   const [currentSourceName, setCurrentSourceName] = useState<string | null>(null);
 
   const activeSource = sources?.find((s) => s.name === currentSourceName) || sources?.find((s) => s.default) || sources?.[0];
-  const isHDR = activeSource?.codec?.toLowerCase().includes('hevc') || activeSource?.name?.toLowerCase().includes('hdr');
+  const isHDR =
+    activeSource?.codec?.toLowerCase().includes('hevc') ||
+    activeSource?.codec === 'h265' ||
+    activeSource?.name?.toLowerCase().includes('hdr');
 
   const handlePlay = useCallback(() => {
-    setIsPaused(false);
     setIsSettingsOpen(false);
     onPlay?.();
   }, [onPlay]);
   const handlePause = useCallback(
     (e) => {
-      setIsPaused(true);
       onPause?.(e.currentTime);
     },
     [onPause],
@@ -145,22 +147,6 @@ const Player: React.FC<PlayerProps> = ({
   }, [playerRef]);
 
   useEffect(() => {
-    let timeoutId: NodeJS.Timeout;
-
-    if (isPaused) {
-      timeoutId = setTimeout(() => {
-        setIsPaused(false);
-      }, 5 * 1000);
-    }
-
-    return () => {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-    };
-  }, [isPaused]);
-
-  useEffect(() => {
     let intervalId: NodeJS.Timeout;
 
     if (onTimeSync) {
@@ -184,27 +170,25 @@ const Player: React.FC<PlayerProps> = ({
   return (
     <>
       <Settings visible={isSettingsOpen} onClose={handleSettingsClose} player={playerRef} />
-      {isPaused && (
-        <div className="absolute z-10 top-0 px-4 pt-2 flex items-center">
-          <BackButton className="mr-2" />
-          <Text>{title}</Text>
-          {isHDR && <Text className="ml-3 px-2 py-0 text-xs font-bold rounded bg-yellow-600 text-black">HDR</Text>}
-        </div>
-      )}
-      {isPaused && (
-        <div className="absolute z-101 bottom-8 right-10 flex items-center">
-          {seasons?.length && (
-            <Button className="text-purple-500 mr-2" icon="list" onClick={handleEpisodesOpen}>
-              Эпизоды
-            </Button>
-          )}
-          <Button className="text-blue-600" icon="settings" onClick={handleSettingsOpen} />
-        </div>
-      )}
+      <div className="absolute z-10 top-0 px-4 pt-2 flex items-center">
+        <BackButton className="mr-2" />
+        <Text>{title}</Text>
+        {activeSource && <Text className="ml-3 px-2 py-0 text-xs font-bold rounded bg-gray-600 text-white">{activeSource.name}</Text>}
+        {isHDR && <Text className="ml-3 px-2 py-0 text-xs font-bold rounded bg-yellow-600 text-black">HDR</Text>}
+      </div>
+      <div className="absolute z-101 bottom-8 right-10 flex items-center">
+        {seasons?.length && (
+          <Button className="text-purple-500 mr-2" icon="list" onClick={handleEpisodesOpen}>
+            Эпизоды
+          </Button>
+        )}
+        <Button className="text-blue-600" icon="settings" onClick={handleSettingsOpen} />
+      </div>
       {item && seasons?.length && (
         <EpisodePicker
           item={item}
           seasons={seasons}
+          currentSeasonNumber={currentSeasonNumber}
           visible={isEpisodesOpen}
           onClose={handleEpisodesClose}
           onEpisodeSelect={onEpisodeSelect}

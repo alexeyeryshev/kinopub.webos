@@ -70,23 +70,24 @@ const VideoView: React.FC = () => {
   const [defaultSubtitleLang] = useStorageState<string>('default_subtitle_lang');
 
   const [currentVideo, setCurrentVideo] = useState(video);
-  const [previousVideo, nextVideo] = usePrevNextVideos(item, currentVideo, season);
+  const [currentSeason, setCurrentSeason] = useState(season);
+  const [previousVideo, nextVideo] = usePrevNextVideos(item, currentVideo, currentSeason);
 
   const currentVideoLinks = useApi('itemMediaLinks', [currentVideo.id]);
 
   const saveCurrentTime = useCallback(
     async ({ number }: Video, currentTime: number) => {
-      await watchingMarkTimeAsync([item.id, currentTime, number, season?.number]);
+      await watchingMarkTimeAsync([item.id, currentTime, number, currentSeason?.number]);
     },
-    [watchingMarkTimeAsync, item, season],
+    [watchingMarkTimeAsync, item, currentSeason],
   );
 
   const playerProps = useDeepMemo(
     () =>
       currentVideoLinks?.data
         ? ({
-            title: getItemTitle(item, currentVideo, season),
-            description: getItemDescription(item, currentVideo, season),
+            title: getItemTitle(item, currentVideo, currentSeason),
+            description: getItemDescription(item, currentVideo, currentSeason),
             poster: item.posters.wide || item.posters.big,
             audios: mapAudios(currentVideo.audios, isAC3ByDefaultActive, savedAudioName, defaultAudioLang),
             sources: mapSources(currentVideoLinks.data.files, streamingType, savedSourceName, defaultQuality),
@@ -96,7 +97,7 @@ const VideoView: React.FC = () => {
         : null,
     [
       item,
-      season,
+      currentSeason,
       currentVideo,
       currentVideoLinks?.data,
       streamingType,
@@ -118,18 +119,27 @@ const VideoView: React.FC = () => {
     [saveCurrentTime, currentVideo],
   );
 
+  const updateVideoAndSeason = useCallback(
+    (video: Video) => {
+      setCurrentVideo(video);
+      const newSeason = item.seasons?.find((s) => s.number === video.snumber);
+      if (newSeason) setCurrentSeason(newSeason);
+    },
+    [item.seasons],
+  );
+
   const handleOnEnded = useCallback(
     (currentTime: number) => {
       saveCurrentTime(currentVideo, currentTime);
 
       if (nextVideo) {
-        setCurrentVideo(nextVideo);
+        updateVideoAndSeason(nextVideo);
         return;
       }
 
       history.goBack();
     },
-    [saveCurrentTime, history, currentVideo, nextVideo],
+    [saveCurrentTime, history, currentVideo, nextVideo, updateVideoAndSeason],
   );
 
   const handleJumpBackward = useCallback(
@@ -137,10 +147,10 @@ const VideoView: React.FC = () => {
       saveCurrentTime(currentVideo, currentTime);
 
       if (previousVideo) {
-        setCurrentVideo(previousVideo);
+        updateVideoAndSeason(previousVideo);
       }
     },
-    [saveCurrentTime, currentVideo, previousVideo],
+    [saveCurrentTime, currentVideo, previousVideo, updateVideoAndSeason],
   );
 
   const handleJumpForward = useCallback(
@@ -148,10 +158,10 @@ const VideoView: React.FC = () => {
       saveCurrentTime(currentVideo, currentTime);
 
       if (nextVideo) {
-        setCurrentVideo(nextVideo);
+        updateVideoAndSeason(nextVideo);
       }
     },
-    [saveCurrentTime, currentVideo, nextVideo],
+    [saveCurrentTime, currentVideo, nextVideo, updateVideoAndSeason],
   );
 
   const handleTimeSync = useCallback(
@@ -183,9 +193,10 @@ const VideoView: React.FC = () => {
   );
 
   const handleEpisodeSelect = useCallback(
-    (episode: Video) => {
+    (episode: Video, newSeason: Season) => {
       saveCurrentTime(currentVideo, 0);
       setCurrentVideo(episode);
+      setCurrentSeason(newSeason);
     },
     [saveCurrentTime, currentVideo],
   );
@@ -200,6 +211,7 @@ const VideoView: React.FC = () => {
           streamingType={streamingType}
           item={item}
           seasons={item.seasons}
+          currentSeasonNumber={currentSeason?.number}
           onPause={handlePause}
           onEnded={handleOnEnded}
           onJumpBackward={handleJumpBackward}
