@@ -7,6 +7,8 @@ import { AudioTrack, SourceTrack, SubtitleTrack } from 'components/media';
 import Popup from 'components/popup';
 import Select from 'components/select';
 
+import { getVideoNode } from './getVideoNode';
+
 const NONE = 'NONE';
 
 type Props = {
@@ -39,9 +41,11 @@ const Settings: React.FC<Props> = ({ visible, diagnosticsVisible, onClose, onDia
   const handleVideoUpdate = useCallback(
     (name: string, value: string) => {
       if (player.current) {
-        const video: any = player.current.getVideoNode();
+        const video: any = getVideoNode(player.current);
 
-        video[name] = value;
+        if (video) {
+          video[name] = value;
+        }
       }
     },
     [player],
@@ -79,7 +83,12 @@ const Settings: React.FC<Props> = ({ visible, diagnosticsVisible, onClose, onDia
 
   useEffect(() => {
     if (visible && player.current) {
-      const video: any = player.current.getVideoNode();
+      const video = getVideoNode(player.current);
+
+      if (!video) {
+        return;
+      }
+
       const { audioTracks, audioTrack, sourceTracks, sourceTrack, subtitleTracks, subtitleTrack } = video;
 
       setAudios(audioTracks || []);

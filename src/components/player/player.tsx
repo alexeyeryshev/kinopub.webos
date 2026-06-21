@@ -11,6 +11,7 @@ import Text from 'components/text';
 import useButtonEffect from 'hooks/useButtonEffect';
 import useStorageState from 'hooks/useStorageState';
 
+import { getVideoNode } from './getVideoNode';
 import PlaybackDiagnosticsOverlay from './playbackDiagnostics';
 import Settings from './settings';
 import StartFrom from './startFrom';
@@ -84,8 +85,8 @@ const Player: React.FC<PlayerProps> = ({
     (e: KeyboardEvent) => {
       const current: any = Spotlight.getCurrent();
       if ((!current || !current.offsetHeight || !current.offsetWidth) && playerRef.current && isPauseByOKClickActive) {
-        const video: any = playerRef.current.getVideoNode();
-        video.playPause();
+        const video = getVideoNode(playerRef.current);
+        video?.playPause();
         return false;
       }
     },
@@ -99,9 +100,9 @@ const Player: React.FC<PlayerProps> = ({
   );
   const handleTimeSync = useCallback(async () => {
     if (playerRef.current && onTimeSync) {
-      const video: any = playerRef.current.getVideoNode();
+      const video = getVideoNode(playerRef.current);
 
-      const currentTime = video['currentTime'];
+      const currentTime = video?.currentTime || 0;
 
       await onTimeSync(currentTime);
     }
@@ -113,33 +114,33 @@ const Player: React.FC<PlayerProps> = ({
     if (playerRef.current) {
       setIsSettingsOpen(true);
 
-      const video: any = playerRef.current.getVideoNode();
-      video.pause();
+      const video = getVideoNode(playerRef.current);
+      video?.pause();
     }
   }, [playerRef]);
   const handleSettingsClose = useCallback(() => {
     if (playerRef.current) {
       setIsSettingsOpen(false);
 
-      const video: any = playerRef.current.getVideoNode();
-      setCurrentSourceName(video.sourceTrack || null);
-      video.play();
+      const video = getVideoNode(playerRef.current);
+      setCurrentSourceName(video?.sourceTrack || null);
+      video?.play();
     }
   }, []);
   const handleEpisodesOpen = useCallback(() => {
     if (playerRef.current && seasons?.length) {
       setIsEpisodesOpen(true);
 
-      const video: any = playerRef.current.getVideoNode();
-      video.pause();
+      const video = getVideoNode(playerRef.current);
+      video?.pause();
     }
   }, [playerRef, seasons]);
   const handleEpisodesClose = useCallback(() => {
     if (playerRef.current) {
       setIsEpisodesOpen(false);
 
-      const video: any = playerRef.current.getVideoNode();
-      video.play();
+      const video = getVideoNode(playerRef.current);
+      video?.play();
     }
   }, []);
   const handleControlsAvailable = useCallback((e: { available: boolean }) => {
@@ -147,8 +148,8 @@ const Player: React.FC<PlayerProps> = ({
   }, []);
   const handlePauseButton = useCallback(() => {
     if (playerRef.current) {
-      const video: any = playerRef.current.getVideoNode();
-      video.pause();
+      const video = getVideoNode(playerRef.current);
+      video?.pause();
     }
   }, [playerRef]);
   const handleDiagnosticsToggle = useCallback(() => {

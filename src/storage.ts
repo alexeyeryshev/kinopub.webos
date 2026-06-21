@@ -80,11 +80,9 @@ export class MyStorage<TKeys extends string = string> {
   };
 
   setItem = <T extends Value>(key: TKeys, value: T, expire?: number) => {
-    const item = setItem(this.storage, this.prefix, key, value, expire);
+    setItem(this.storage, this.prefix, key, value, expire);
 
     this.emit();
-
-    return item;
   };
 
   removeItem = (key: TKeys) => {

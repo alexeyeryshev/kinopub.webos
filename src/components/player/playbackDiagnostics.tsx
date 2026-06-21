@@ -3,7 +3,7 @@ import { VideoPlayerBase } from '@enact/moonstone/VideoPlayer';
 import cx from 'classnames';
 import HLS from 'hls.js';
 
-import { MediaRef } from 'components/media';
+import { getVideoNode } from './getVideoNode';
 
 const HISTORY_LIMIT = 30;
 const VIDEO_EVENTS = ['playing', 'waiting', 'stalled', 'canplay', 'canplaythrough', 'seeking', 'seeked', 'error', 'ended'];
@@ -416,9 +416,7 @@ function PlaybackDiagnosticsOverlay({ visible, player }: Props) {
   }, []);
 
   const readMediaRef = useCallback(() => {
-    const videoPlayer = player.current as any;
-
-    return videoPlayer?.getVideoNode?.() as MediaRef | undefined;
+    return getVideoNode(player.current);
   }, [player]);
 
   useEffect(() => {

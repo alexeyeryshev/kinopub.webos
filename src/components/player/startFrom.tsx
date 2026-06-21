@@ -4,6 +4,8 @@ import { VideoPlayerBase } from '@enact/moonstone/VideoPlayer';
 import Button from 'components/button';
 import SpotlightContainer from 'components/spotlightContainer';
 
+import { getVideoNode } from './getVideoNode';
+
 import { secondsToDuration } from 'utils/date';
 
 type Props = {
@@ -20,9 +22,11 @@ const StartFrom: React.FC<Props> = ({ startTime, startInDelay = 5, player }) => 
   const handleStartFromClick = useCallback(() => {
     if (player.current) {
       setVisible(false);
-      const video: any = player.current.getVideoNode();
+      const video = getVideoNode(player.current);
 
-      video.currentTime = startTime;
+      if (video && typeof startTime === 'number') {
+        video.currentTime = startTime;
+      }
     }
   }, [startTime, player]);
   const handleStartFromBeginingClick = useCallback(() => {
