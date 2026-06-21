@@ -11,6 +11,7 @@ import Text from 'components/text';
 import useButtonEffect from 'hooks/useButtonEffect';
 import useStorageState from 'hooks/useStorageState';
 
+import PlaybackDiagnosticsOverlay from './playbackDiagnostics';
 import Settings from './settings';
 import StartFrom from './startFrom';
 
@@ -58,6 +59,7 @@ const Player: React.FC<PlayerProps> = ({
   const [isLoaded, setIsLoaded] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isEpisodesOpen, setIsEpisodesOpen] = useState(false);
+  const [isDiagnosticsVisible, setIsDiagnosticsVisible] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(true);
   const [isPauseByOKClickActive] = useStorageState<boolean>('is_pause_by_ok_click_active');
   const [currentSourceName, setCurrentSourceName] = useState<string | null>(null);
@@ -149,6 +151,16 @@ const Player: React.FC<PlayerProps> = ({
       video.pause();
     }
   }, [playerRef]);
+  const handleDiagnosticsToggle = useCallback(() => {
+    setIsDiagnosticsVisible((visible) => !visible);
+  }, []);
+  const handleDiagnosticsClose = useCallback(() => {
+    if (isDiagnosticsVisible && !isSettingsOpen && !isEpisodesOpen) {
+      setIsDiagnosticsVisible(false);
+
+      return false;
+    }
+  }, [isDiagnosticsVisible, isSettingsOpen, isEpisodesOpen]);
 
   useEffect(() => {
     let intervalId: NodeJS.Timeout;
@@ -170,10 +182,18 @@ const Player: React.FC<PlayerProps> = ({
   useButtonEffect('Pause', handlePauseButton);
   useButtonEffect('Enter', handlePlayPause);
   useButtonEffect('ArrowUp', handleSettingsOpen);
+  useButtonEffect('Back', handleDiagnosticsClose);
 
   return (
     <>
-      <Settings visible={isSettingsOpen} onClose={handleSettingsClose} player={playerRef} />
+      <Settings
+        visible={isSettingsOpen}
+        diagnosticsVisible={isDiagnosticsVisible}
+        onClose={handleSettingsClose}
+        onDiagnosticsToggle={handleDiagnosticsToggle}
+        player={playerRef}
+      />
+      <PlaybackDiagnosticsOverlay visible={isDiagnosticsVisible} player={playerRef} />
       {controlsVisible && (
         <div className="absolute z-10 top-0 px-4 pt-2 flex items-center">
           <BackButton className="mr-2" />

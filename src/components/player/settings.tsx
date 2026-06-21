@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { VideoPlayerBase } from '@enact/moonstone/VideoPlayer';
 import map from 'lodash/map';
 
+import Button from 'components/button';
 import { AudioTrack, SourceTrack, SubtitleTrack } from 'components/media';
 import Popup from 'components/popup';
 import Select from 'components/select';
@@ -10,11 +11,13 @@ const NONE = 'NONE';
 
 type Props = {
   visible: boolean;
+  diagnosticsVisible: boolean;
   onClose: () => void;
+  onDiagnosticsToggle: () => void;
   player: React.MutableRefObject<VideoPlayerBase | undefined>;
 };
 
-const Settings: React.FC<Props> = ({ visible, onClose, player }) => {
+const Settings: React.FC<Props> = ({ visible, diagnosticsVisible, onClose, onDiagnosticsToggle, player }) => {
   const [isOpen, setIsOpen] = useState(visible);
   const [audios, setAudios] = useState<AudioTrack[]>([]);
   const [currentAudio, setCurrentAudio] = useState<string | null>(null);
@@ -69,26 +72,26 @@ const Settings: React.FC<Props> = ({ visible, onClose, player }) => {
   const handleClose = useCallback(() => {
     onClose();
   }, [onClose]);
+  const handleDiagnosticsToggle = useCallback(() => {
+    onDiagnosticsToggle();
+    handleClose();
+  }, [onDiagnosticsToggle, handleClose]);
 
   useEffect(() => {
     if (visible && player.current) {
       const video: any = player.current.getVideoNode();
       const { audioTracks, audioTrack, sourceTracks, sourceTrack, subtitleTracks, subtitleTrack } = video;
 
-      if (audioTracks?.length > 1 || sourceTracks?.length > 1 || subtitleTracks?.length > 0) {
-        setAudios(audioTracks);
-        setCurrentAudio(audioTrack);
+      setAudios(audioTracks || []);
+      setCurrentAudio(audioTrack || null);
 
-        setSources(sourceTracks);
-        setCurrentSource(sourceTrack);
+      setSources(sourceTracks || []);
+      setCurrentSource(sourceTrack || null);
 
-        setSubtitles(subtitleTracks);
-        setCurrentSubtitle(subtitleTrack || NONE);
-      } else {
-        handleClose();
-      }
+      setSubtitles(subtitleTracks || []);
+      setCurrentSubtitle(subtitleTrack || NONE);
     }
-  }, [visible, player, handleClose]);
+  }, [visible, player]);
 
   useEffect(() => {
     let timeoutId: NodeJS.Timeout;
@@ -124,6 +127,9 @@ const Settings: React.FC<Props> = ({ visible, onClose, player }) => {
           splitIn={4}
         />
       )}
+      <Button className="my-2 text-green-500" icon="bug_report" onClick={handleDiagnosticsToggle}>
+        {diagnosticsVisible ? 'Скрыть диагностику воспроизведения' : 'Диагностика воспроизведения'}
+      </Button>
     </Popup>
   );
 };

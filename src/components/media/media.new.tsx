@@ -51,6 +51,8 @@ export type MediaRef = {
   pause: () => void;
   playPause: () => Promise<void>;
   load: () => void;
+  readonly videoElement: HTMLVideoElement | null;
+  readonly hls: HLS | null;
   currentTime: number;
   playbackRate: number;
   audioTracks?: AudioTrack[];
@@ -287,6 +289,7 @@ function useVideoPlayer({
   return useMemo(
     () => ({
       videoRef,
+      hlsRef,
       getAudioTracks,
       getAudioTrack,
       setAudioTrack,
@@ -299,6 +302,7 @@ function useVideoPlayer({
     }),
     [
       videoRef,
+      hlsRef,
       getAudioTracks,
       getAudioTrack,
       setAudioTrack,
@@ -405,6 +409,12 @@ function useVideoPlayerApi(ref: React.ForwardedRef<MediaRef>, props: OwnProps) {
       pause,
       playPause,
       load,
+      get videoElement() {
+        return videoRef.current;
+      },
+      get hls() {
+        return player.hlsRef.current;
+      },
       get currentTime() {
         return getCurrentTime();
       },
@@ -469,6 +479,7 @@ function useVideoPlayerApi(ref: React.ForwardedRef<MediaRef>, props: OwnProps) {
       pause,
       playPause,
       load,
+      videoRef,
       getCurrentTime,
       setCurrentTime,
       getPlaybackRate,
