@@ -117,12 +117,22 @@ When HLS.js is active, show:
 
 Read all HLS fields defensively because not every field is guaranteed in the installed `hls.js` version.
 
+Derive the Auto/Fixed label from `hls.autoLevelEnabled` (falling back to `hls.currentLevel === -1` only if that
+field is missing), not from the number of available levels. A stream can expose multiple levels while a level
+was pinned manually, and a stream can expose a single level while still reporting automatic mode; the level
+count alone does not indicate which is active.
+
 ## Segment Loading
 
 Subscribe to HLS events when available:
 
+- `FRAG_LOADING` (fragment load start);
+- `FRAG_LOADED` (fragment load completion, before it is appended to the buffer);
+- `FRAG_LOAD_EMERGENCY_ABORTED` (ABR aborted an in-flight fragment load, typically under sustained low bandwidth);
 - `FRAG_BUFFERED`;
 - `FRAG_CHANGED`;
+- `BUFFER_APPENDING` (buffer append start);
+- `BUFFER_APPENDED` (buffer append completion);
 - `LEVEL_SWITCHED`;
 - `ERROR`.
 
@@ -134,7 +144,17 @@ For the most recently completed media fragment, show:
 - calculated effective throughput;
 - time elapsed since the last successfully buffered fragment.
 
-Use HLS loader stats defensively and avoid division by zero.
+Use HLS loader stats defensively and avoid division by zero. `FragLoadedData` and the buffer-append events do
+not carry top-level `stats`; read them from `frag.stats` instead, since `Fragment.stats` is always populated.
+
+Track the fragment-load and buffer-append lifecycle as two separate pending/completed stages (`Segment Pipeline`) so a stall can be attributed to either phase:
+
+- fragment load: idle / loading (with elapsed time) / loaded (with duration) / aborted;
+- buffer append: idle / appending (with elapsed time) / appended (with duration);
+- a running count of `FRAG_LOAD_EMERGENCY_ABORTED` events.
+
+This separates "waiting on the network for a fragment" from "waiting on the media pipeline to accept a
+fragment it already has", which the two combined event types on their own do not make clear.
 
 ## Errors
 
@@ -144,19 +164,29 @@ For each error show, when available:
 
 - timestamp;
 - fatal/non-fatal flag;
+- failure category (see below);
 - error type;
 - error details;
 - HTTP response status;
 - request hostname only.
 
-The overlay should distinguish:
+The overlay must distinguish, for every `ERROR` event:
 
-- fragment load timeout;
-- manifest load failure;
-- HTTP 401/403/404/5xx;
-- media/decode errors;
-- buffer starvation;
-- normal HLS level switches.
+- network failure — `data.type === 'networkError'` (manifest/level/fragment/key load errors and timeouts,
+  including fragment load timeout);
+- buffer starvation — `data.details` is `bufferStalledError`, `bufferSeekOverHole`, `bufferNudgeOnStall`, or
+  `bufferFullError`. hls.js reports these as `mediaError` because they surface through the media element, so
+  `details` must be checked before falling back to `type`;
+- media/decode failure — any other `mediaError` or `muxError` (parsing, codec, append errors);
+- other — key-system and uncategorized errors.
+
+Maintain a running count per category (`Failure Summary`) plus the most recent category and how long ago it
+occurred, so a pattern of repeated network vs. buffer-starvation vs. decode failures is visible without
+reading the full event history.
+
+Normal HLS level switches (`LEVEL_SWITCHED`) are not errors and must never be counted in the failure summary;
+they are shown in the event history prefixed with `level switch` to keep them visually distinct from error
+entries.
 
 ## Decode Quality
 
