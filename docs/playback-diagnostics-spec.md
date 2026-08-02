@@ -149,9 +149,16 @@ not carry top-level `stats`; read them from `frag.stats` instead, since `Fragmen
 
 Track the fragment-load and buffer-append lifecycle as two separate pending/completed stages (`Segment Pipeline`) so a stall can be attributed to either phase:
 
-- fragment load: idle / loading (with elapsed time) / loaded (with duration) / aborted;
-- buffer append: idle / appending (with elapsed time) / appended (with duration);
+- fragment load: idle / loading (with elapsed time) / loaded (with duration) / aborted, keyed by `frag.type`
+  (`main` / `audio` / `subtitle`);
+- buffer append: idle / appending (with elapsed time) / appended (with duration), keyed by the SourceBuffer
+  type (`video` / `audio` / `audiovideo`);
 - a running count of `FRAG_LOAD_EMERGENCY_ABORTED` events.
+
+Keying by stream/buffer type matters: on a stream with alternate audio, the main (video) and audio stream
+controllers load fragments and append to their own SourceBuffers independently. A single shared stage would
+let an audio fragment or append completing mask an ongoing stall on the main video stream, defeating the
+purpose of the pipeline view.
 
 This separates "waiting on the network for a fragment" from "waiting on the media pipeline to accept a
 fragment it already has", which the two combined event types on their own do not make clear.
@@ -174,10 +181,12 @@ The overlay must distinguish, for every `ERROR` event:
 
 - network failure — `data.type === 'networkError'` (manifest/level/fragment/key load errors and timeouts,
   including fragment load timeout);
-- buffer starvation — `data.details` is `bufferStalledError`, `bufferSeekOverHole`, `bufferNudgeOnStall`, or
-  `bufferFullError`. hls.js reports these as `mediaError` because they surface through the media element, so
-  `details` must be checked before falling back to `type`;
-- media/decode failure — any other `mediaError` or `muxError` (parsing, codec, append errors);
+- buffer starvation — `data.details` is `bufferStalledError`, `bufferSeekOverHole`, or `bufferNudgeOnStall`.
+  hls.js reports these as `mediaError` because they surface through the media element, so `details` must be
+  checked before falling back to `type`;
+- media/decode failure — any other `mediaError` or `muxError` (parsing, codec, and append errors, including
+  `bufferFullError`: a SourceBuffer quota-exceeded/append-capacity failure, which is the opposite condition
+  from starvation and must not be counted as one);
 - other — key-system and uncategorized errors.
 
 Maintain a running count per category (`Failure Summary`) plus the most recent category and how long ago it
