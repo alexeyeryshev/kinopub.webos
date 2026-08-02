@@ -19,10 +19,6 @@ video {
   bottom: 0;
 }
 
-video::cue {
-  opacity: var(--subtitle-opacity, 1);
-}
-
 .enact-fit {
   padding: 0 !important;
 }

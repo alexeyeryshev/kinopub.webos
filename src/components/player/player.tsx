@@ -165,7 +165,14 @@ const Player: React.FC<PlayerProps> = ({
   }, [isDiagnosticsVisible, isSettingsOpen, isEpisodesOpen]);
 
   useEffect(() => {
-    document.documentElement.style.setProperty('--subtitle-opacity', String(subtitleOpacity ?? 1));
+    const styleId = 'subtitle-opacity-style';
+    let styleEl = document.getElementById(styleId) as HTMLStyleElement | null;
+    if (!styleEl) {
+      styleEl = document.createElement('style');
+      styleEl.id = styleId;
+      document.head.appendChild(styleEl);
+    }
+    styleEl.textContent = `video::cue { opacity: ${subtitleOpacity ?? 1}; }`;
   }, [subtitleOpacity]);
 
   useEffect(() => {
