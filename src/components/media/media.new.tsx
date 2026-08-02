@@ -97,6 +97,9 @@ function useVideoPlayer({
   // with multiple levels, i.e. capable of real ABR/Auto selection.
   const [isAdaptiveLevel, setIsAdaptiveLevel] = useState(false);
   const [qualityMode, setQualityMode] = useState<'auto' | 'fixed'>('fixed');
+  // Mirrors qualityMode synchronously so a pending Auto request survives a
+  // replacement manifest that is still loading (see setSourceTrack below).
+  const qualityModeRef = useRef(qualityMode);
   const [currentAudioTrack, setCurrentAudioTrack] = useState<AudioTrack>(
     () => (audioTracks?.find((audioTrack) => audioTrack.default) || audioTracks?.[0])!,
   );
@@ -138,10 +141,14 @@ function useVideoPlayer({
   const setSourceTrack = useCallback(
     (sourceTrackName: string) => {
       // Delegate level selection to HLS.js instead of pinning a fixed level.
-      if (sourceTrackName === AUTO_SOURCE_NAME && isAdaptiveLevel) {
+      // If a replacement manifest is still loading (hls.levels not known
+      // yet), the request is kept in qualityModeRef and honored by the
+      // MANIFEST_PARSED handler below once the new levels are known.
+      if (sourceTrackName === AUTO_SOURCE_NAME) {
+        qualityModeRef.current = 'auto';
         setQualityMode('auto');
 
-        if (hlsRef.current) {
+        if (hlsRef.current && hlsRef.current.levels.length > 1) {
           hlsRef.current.currentLevel = -1;
         }
 
@@ -151,6 +158,7 @@ function useVideoPlayer({
       const sourceTrackIndex = sourceTracks?.findIndex((sourceTrack) => sourceTrack.name === sourceTrackName) ?? -1;
       if (sourceTrackIndex !== -1) {
         const sourceTrack = sourceTracks![sourceTrackIndex];
+        qualityModeRef.current = 'fixed';
         setQualityMode('fixed');
         setCurrentSourceTrack(sourceTrack);
         onSourceChange?.(sourceTrack);
@@ -168,7 +176,7 @@ function useVideoPlayer({
         }
       }
     },
-    [sourceTracks, onSourceChange, isAdaptiveLevel],
+    [sourceTracks, onSourceChange],
   );
   const getSubtitleTracks = useCallback(() => subtitleTracks, [subtitleTracks]);
   const getSubtitleTrack = useCallback(() => currentSubtitleTrack?.name, [currentSubtitleTrack]);
@@ -217,9 +225,11 @@ function useVideoPlayer({
   useEffect(() => {
     if (videoRef.current && currentSrc) {
       // A freshly loaded source always starts pinned to the requested
-      // fixed quality, matching the previous manual-selection behavior.
-      // Auto is only ever entered afterwards, explicitly, by the user.
+      // fixed quality, matching the previous manual-selection behavior,
+      // unless a pending Auto request (see setSourceTrack) arrives before
+      // the new manifest finishes parsing.
       setIsAdaptiveLevel(false);
+      qualityModeRef.current = 'fixed';
       setQualityMode('fixed');
 
       if (isHLSJSActive !== false && currentSrc.includes('.m3u8') && HLS.isSupported()) {
@@ -234,6 +244,17 @@ function useVideoPlayer({
         hls.on(HLS.Events.MANIFEST_PARSED, () => {
           const isAdaptive = hls.levels.length > 1;
           setIsAdaptiveLevel(isAdaptive);
+
+          if (isAdaptive && qualityModeRef.current === 'auto') {
+            hls.currentLevel = -1;
+            return;
+          }
+
+          if (qualityModeRef.current === 'auto') {
+            // Auto was requested but this manifest can't adapt; fall back.
+            qualityModeRef.current = 'fixed';
+            setQualityMode('fixed');
+          }
 
           const targetHeight = parseInt(currentSourceTrackRef.current?.name || '');
           if (isAdaptive && !isNaN(targetHeight)) {
