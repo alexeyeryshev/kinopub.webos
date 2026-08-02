@@ -1,0 +1,85 @@
+# Continuous integration workflows
+
+This fork uses GitHub Actions for checks on pull requests, for the GitHub Pages
+deployment, and for publishing installable packages. This document describes what
+each workflow does and how to reproduce its checks locally.
+
+> This repository is a fork. GitHub disables Actions on new forks by default, so
+> the workflows below only run after Actions is enabled once under
+> **Settings → Actions → General**.
+
+## Node.js version
+
+Every workflow builds with Node.js 14, matching `.nvmrc` (`lts/fermium`). This is
+a hard requirement rather than a preference: the pinned `react-scripts` 4 /
+webpack 4 toolchain fails on Node.js 17 and newer with
+`ERR_OSSL_EVP_UNSUPPORTED`. The version is set in one place,
+`.github/actions/setup-node-yarn`, which every workflow reuses for the Node.js
+setup, the Yarn cache, and `yarn install --frozen-lockfile`.
+
+## `ci.yml` — checks on pull requests and `master`
+
+Runs on every pull request, on pushes to `master`, and on demand. Runs for
+superseded commits on the same branch or pull request are cancelled.
+
+| Job                    | What it does                                                                   | Local equivalent                                                |
+| ---------------------- | ------------------------------------------------------------------------------ | --------------------------------------------------------------- |
+| Lint, format and types | ESLint, Prettier in check mode, `tsc --noEmit`, and the test runner            | `yarn lint && yarn format:check && yarn typecheck && yarn test` |
+| Docs links             | Verifies relative links between Markdown files resolve to existing files       | `yarn check:docs`                                               |
+| Build and package      | Builds the app, packages the IPKs, checks the installable IPK name, uploads it | `yarn build && yarn package`                                    |
+
+Notes:
+
+- The type check runs separately from the build because `tsc --noEmit` reports
+  type errors in about a minute, while `yarn build` only reaches them after a
+  full webpack build.
+- There are no test files yet. The test step uses `--passWithNoTests`, so added
+  tests start running without a workflow change.
+- The docs link check (`scripts/check-docs-links.js`) is plain Node.js with no
+  dependencies and requests no external URLs; it only resolves relative links on
+  disk. It exists because the documentation here cross-references itself
+  (`README.md` → `docs/`, `ROADMAP.md` → the diagnostics documents), and a moved
+  file otherwise breaks those links silently.
+- The build job fails if `out/kinopub.webos_v<version>.ipk` is missing, since
+  that is the exact file the install instructions point at (`ares-install` takes
+  the version-named package, and `scripts/package.js` derives the name from
+  `package.json`).
+- Packages are uploaded as the `ipk-packages` artifact and kept for 14 days, so a
+  build from a pull request can be installed on a TV without building locally.
+
+## `deploy-pages.yml` — GitHub Pages
+
+Builds `master` and publishes `build/` to the `gh-pages` branch. Deployments are
+serialized, so a running deployment is never cancelled by a newer one.
+
+## `release.yml` — packages attached to a release
+
+Runs when a release is published, and can also be run manually against an
+existing tag. It checks out the released tag, builds, packages, and uploads every
+IPK to that release with `gh release upload --clobber`.
+
+Before building, it checks that the tag matches the `package.json` version. IPK
+names come from `package.json`, not from the tag, so a mismatch would publish
+assets named after a different version than the release.
+
+## `release-drafter.yml` and `pr-labeler.yml` — release notes
+
+`release-drafter.yml` keeps a draft release up to date from merged pull requests,
+grouped into categories by label according to `.github/release-drafter.yml`.
+
+`pr-labeler.yml` supplies those labels. It applies one of `feature`, `fix`,
+`documentation`, or `chore` to each pull request, derived in this order:
+
+1. a conventional-commit title prefix (`fix:`, `feat(player):`, …);
+2. a change that touches only Markdown files, which is labeled `documentation`;
+3. the leading verb of the title, matching the imperative style used here
+   ("Add …" → `feature`, "Fix …" → `fix`, "Document …" → `documentation`,
+   "Bump …" → `chore`);
+4. a keyword in the branch name.
+
+A pull request that already carries one of these labels is left alone, so a label
+set by hand is never overwritten. If no rule matches, the pull request is left
+unlabeled and its entry appears in the uncategorized part of the draft release.
+
+The workflow uses `pull_request_target` because labeling needs a writable token.
+It never checks out or runs code from the pull request; it only calls the API.

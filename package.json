@@ -17,6 +17,11 @@
     "lint:fix": "concurrently \"yarn run eslint:fix\"",
     "eslint": "eslint 'src/**/*.ts' 'src/**/*.tsx'",
     "eslint:fix": "yarn run eslint --fix",
+    "typecheck": "tsc --noEmit",
+    "prettier": "prettier \"src/**/*.{ts,tsx,js,jsx}\" \"scripts/**/*.js\" \"*.{json,md,js}\" \"docs/**/*.md\" \".github/**/*.yml\"",
+    "format": "yarn run prettier --write",
+    "format:check": "yarn run prettier --check",
+    "check:docs": "node ./scripts/check-docs-links.js",
     "prepare": "husky install"
   },
   "dependencies": {

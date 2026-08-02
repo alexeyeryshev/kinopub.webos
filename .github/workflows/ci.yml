@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+# Feature branches here are pushed repeatedly while a change is being iterated
+# on; only the newest commit of a branch or pull request needs a green run.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Lint, format and types
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js and Yarn
+        uses: ./.github/actions/setup-node-yarn
+
+      - name: ESLint
+        run: yarn lint
+
+      - name: Prettier
+        run: yarn format:check
+
+      # `yarn build` type checks as well, but only after a full webpack build.
+      # Running tsc separately reports type errors in about a minute.
+      - name: TypeScript
+        run: yarn typecheck
+
+      # The project currently has no test files; the step is here so that added
+      # tests run without a workflow change, and passes until then.
+      - name: Tests
+        run: yarn test --watchAll=false --passWithNoTests
+        env:
+          CI: 'true'
+
+  docs:
+    name: Docs links
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The link check is plain Node.js with no imports from the project, so it
+      # runs on the runner's Node.js without installing dependencies.
+      - name: Check relative links in Markdown
+        run: node ./scripts/check-docs-links.js
+
+  build:
+    name: Build and package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js and Yarn
+        uses: ./.github/actions/setup-node-yarn
+
+      - name: Build app
+        run: yarn build
+
+      - name: Package app
+        run: yarn package
+
+      # `scripts/package.js` derives IPK names from the `package.json` version,
+      # and `docs/build-and-install.md` tells people to install exactly this
+      # file. Fail loudly here rather than publishing a differently named asset.
+      - name: Check the installable package exists
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          package="out/kinopub.webos_v${version}.ipk"
+          if [ ! -f "$package" ]; then
+            echo "Expected package $package was not produced. Contents of out/:"
+            ls -l out/ || true
+            exit 1
+          fi
+          echo "Built $package ($(du -h "$package" | cut -f1))"
+
+      - name: Archive packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: ipk-packages
+          path: out/*.ipk
+          if-no-files-found: error
+          retention-days: 14
