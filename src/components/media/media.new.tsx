@@ -32,6 +32,13 @@ export type SubtitleTrack = {
 
 export type StreamingType = 'http' | 'hls' | 'hls2' | 'hls4';
 
+/**
+ * Sentinel source-track name for HLS.js automatic level selection.
+ * Only offered when the currently loaded stream is a genuine master
+ * playlist exposing more than one HLS level.
+ */
+export const AUTO_SOURCE_NAME = 'Авто';
+
 type OwnProps = {
   autoPlay?: boolean;
   audioTracks?: AudioTrack[];
@@ -86,6 +93,10 @@ function useVideoPlayer({
   const isSettingsOpenRef = useRef(false);
   const [isLoaded, setIsLoaded] = useState(false);
   const [isHLSJSActive] = useStorageState<boolean>('is_hls.js_active');
+  // Whether the currently loaded HLS manifest is a genuine master playlist
+  // with multiple levels, i.e. capable of real ABR/Auto selection.
+  const [isAdaptiveLevel, setIsAdaptiveLevel] = useState(false);
+  const [qualityMode, setQualityMode] = useState<'auto' | 'fixed'>('fixed');
   const [currentAudioTrack, setCurrentAudioTrack] = useState<AudioTrack>(
     () => (audioTracks?.find((audioTrack) => audioTrack.default) || audioTracks?.[0])!,
   );
@@ -111,17 +122,41 @@ function useVideoPlayer({
     },
     [audioTracks, onAudioChange],
   );
-  const getSourceTracks = useCallback(() => sourceTracks, [sourceTracks]);
-  const getSourceTrack = useCallback(() => currentSourceTrack?.name, [currentSourceTrack]);
+  const getSourceTracks = useCallback(() => {
+    if (!sourceTracks || !isAdaptiveLevel || !currentSourceTrack) {
+      return sourceTracks;
+    }
+
+    // Only a genuine master playlist with multiple HLS levels gets an
+    // explicit Auto option, delegating level selection to HLS.js.
+    return [{ ...currentSourceTrack, name: AUTO_SOURCE_NAME, default: false }, ...sourceTracks];
+  }, [sourceTracks, isAdaptiveLevel, currentSourceTrack]);
+  const getSourceTrack = useCallback(
+    () => (qualityMode === 'auto' && isAdaptiveLevel ? AUTO_SOURCE_NAME : currentSourceTrack?.name),
+    [qualityMode, isAdaptiveLevel, currentSourceTrack],
+  );
   const setSourceTrack = useCallback(
     (sourceTrackName: string) => {
+      // Delegate level selection to HLS.js instead of pinning a fixed level.
+      if (sourceTrackName === AUTO_SOURCE_NAME && isAdaptiveLevel) {
+        setQualityMode('auto');
+
+        if (hlsRef.current) {
+          hlsRef.current.currentLevel = -1;
+        }
+
+        return;
+      }
+
       const sourceTrackIndex = sourceTracks?.findIndex((sourceTrack) => sourceTrack.name === sourceTrackName) ?? -1;
       if (sourceTrackIndex !== -1) {
         const sourceTrack = sourceTracks![sourceTrackIndex];
+        setQualityMode('fixed');
         setCurrentSourceTrack(sourceTrack);
         onSourceChange?.(sourceTrack);
 
         // For adaptive HLS (e.g. hls4): switch quality via HLS.js level
+        // in place when the new track resolves to the same master playlist.
         if (hlsRef.current && hlsRef.current.levels.length > 1) {
           const targetHeight = parseInt(sourceTrack.name);
           if (!isNaN(targetHeight)) {
@@ -133,7 +168,7 @@ function useVideoPlayer({
         }
       }
     },
-    [sourceTracks, onSourceChange],
+    [sourceTracks, onSourceChange, isAdaptiveLevel],
   );
   const getSubtitleTracks = useCallback(() => subtitleTracks, [subtitleTracks]);
   const getSubtitleTrack = useCallback(() => currentSubtitleTrack?.name, [currentSubtitleTrack]);
@@ -181,6 +216,12 @@ function useVideoPlayer({
 
   useEffect(() => {
     if (videoRef.current && currentSrc) {
+      // A freshly loaded source always starts pinned to the requested
+      // fixed quality, matching the previous manual-selection behavior.
+      // Auto is only ever entered afterwards, explicitly, by the user.
+      setIsAdaptiveLevel(false);
+      setQualityMode('fixed');
+
       if (isHLSJSActive !== false && currentSrc.includes('.m3u8') && HLS.isSupported()) {
         const hls = (hlsRef.current = new HLS({
           enableWebVTT: false,
@@ -191,8 +232,11 @@ function useVideoPlayer({
           hls.loadSource(currentSrc);
         });
         hls.on(HLS.Events.MANIFEST_PARSED, () => {
+          const isAdaptive = hls.levels.length > 1;
+          setIsAdaptiveLevel(isAdaptive);
+
           const targetHeight = parseInt(currentSourceTrackRef.current?.name || '');
-          if (!isNaN(targetHeight) && hls.levels.length > 1) {
+          if (isAdaptive && !isNaN(targetHeight)) {
             const levelIndex = hls.levels.findIndex((l) => l.height === targetHeight);
             if (levelIndex !== -1) {
               hls.currentLevel = levelIndex;
