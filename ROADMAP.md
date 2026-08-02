@@ -96,6 +96,8 @@ If a source cannot adapt in place, treat switching to another source URL as a se
 
 ### 5. P1 — Reduce excessive subtitle brightness, especially in HDR
 
+**Status:** the manual subtitle brightness/opacity control described below has been implemented (in-player Settings popup, persisted via storage, applied through `video::cue { opacity: var(--subtitle-opacity) }` so it covers native `<track>` and HLS.js-rendered cues alike). The reproduction/isolation steps and the scene-adaptive follow-up are still open.
+
 The current subtitle size and position are already satisfactory and should not be changed. The remaining issue is that subtitles appear excessively bright, as if rendered at full brightness, with a possible HDR-specific component.
 
 First reproduce and isolate the behavior:
