@@ -94,16 +94,30 @@ The first version should be conservative:
 
 If a source cannot adapt in place, treat switching to another source URL as a separate implementation path rather than silently pretending it is ABR.
 
-### 5. P2 — Decide and implement a readable subtitle presentation for the TV
+### 5. P1 — Reduce excessive subtitle brightness, especially in HDR
 
-The player currently adds subtitles through a native `<track>` element, converting SRT to VTT when needed. Before changing it:
+The current subtitle size and position are already satisfactory and should not be changed. The remaining issue is that subtitles appear excessively bright, as if rendered at full brightness, with a possible HDR-specific component.
 
-- inspect how the current subtitles render on the LG G5;
-- choose the target appearance for film viewing distance: size, outline/shadow, bottom offset, and background treatment;
-- check whether the webOS media element applies the required `::cue` styling reliably;
-- use a custom subtitle layer only if native track styling is insufficient.
+First reproduce and isolate the behavior:
 
-Verify that subtitle appearance remains stable after subtitle switching, seeking, source/quality changes, and player reloads.
+- compare the same subtitle and scene in SDR and HDR;
+- check whether the excessive brightness is present on all content or primarily on HDR content;
+- determine whether the effect comes from the subtitle color/opacity, HDR tone mapping, or the LG webOS compositor;
+- verify whether native `<track>` and `::cue` styling on the LG G5 reliably supports the required color/opacity control.
+
+The first implementation should provide a user-controlled subtitle brightness/opacity setting:
+
+- keep the current size and screen position unchanged;
+- apply the setting consistently to the subtitle text and any outline, shadow, or background;
+- persist it across subtitle switching, seeking, source/quality changes, and player reloads;
+- use the native track path if it can enforce the setting reliably;
+- use a custom subtitle layer only if native styling cannot provide dependable control on webOS.
+
+Treat scene-adaptive brightness as a follow-up enhancement, not a prerequisite for the manual control:
+
+- investigate whether reliable, low-cost scene/luminance information is available on the LG G5 playback path;
+- only implement automatic adaptation if it can work without destabilizing playback or adding unacceptable CPU/GPU cost;
+- if frame analysis or webOS rendering limitations make it unreliable, keep the manual brightness control as the supported solution.
 
 ### 6. P2 — Make the build and TV-install loop reproducible
 
@@ -126,3 +140,4 @@ Keep lint/build checks part of the normal change loop, especially for player and
 - Do not change network, retry, source-selection, or decoder behavior before the diagnostic validation identifies the relevant failure mode.
 - Do not assume that a fixed-quality stream can be made adaptive without a master playlist or another source URL.
 - Preserve the current diagnostic privacy guarantees.
+- Preserve the currently acceptable subtitle size and position while working on subtitle brightness.
