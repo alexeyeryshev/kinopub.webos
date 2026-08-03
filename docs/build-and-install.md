@@ -79,6 +79,7 @@ Complete this once per TV, following LG's [Developer Mode app guide](https://web
    ```
 
    When prompted, enter the case-sensitive passphrase shown in the Developer Mode app.
+
 6. Verify the connection:
 
    ```sh
