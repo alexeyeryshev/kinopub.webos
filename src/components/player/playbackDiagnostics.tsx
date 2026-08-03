@@ -758,7 +758,7 @@ function PlaybackDiagnosticsOverlay({ visible, player }: Props) {
   }
 
   return (
-    <div className="pointer-events-none absolute z-101 top-14 left-6 right-6 max-h-screen overflow-hidden rounded bg-black bg-opacity-80 p-4 text-white ring">
+    <div className="pointer-events-none absolute z-101 top-14 left-6 right-6 bottom-6 flex flex-col overflow-hidden rounded bg-black bg-opacity-80 p-4 text-white ring">
       <div className="mb-3 flex items-center justify-between">
         <div className="text-2xl font-bold">Диагностика воспроизведения</div>
         <div className="text-lg text-gray-300">Back: закрыть</div>
@@ -767,107 +767,114 @@ function PlaybackDiagnosticsOverlay({ visible, player }: Props) {
       {!snapshot && <div className="text-xl">Видео еще не готово</div>}
 
       {snapshot && (
-        <div className="grid grid-cols-3 gap-4 text-base leading-snug">
-          <section>
-            <h3 className="mb-1 text-xl font-bold text-blue-300">Playback</h3>
-            <div>
-              Time: {formatTime(snapshot.currentTime)} / {formatTime(snapshot.duration)}
-            </div>
-            <div>paused: {String(snapshot.paused)}</div>
-            <div>seeking: {String(snapshot.seeking)}</div>
-            <div>
-              readyState: {snapshot.readyState} {snapshot.readyStateLabel}
-            </div>
-            <div>
-              networkState: {snapshot.networkState} {snapshot.networkStateLabel}
-            </div>
-            <div>video error: {String(snapshot.videoError)}</div>
-            {snapshot.videoError && (
+        <div className="grid min-h-0 flex-1 grid-cols-3 gap-4 text-base leading-snug">
+          {/* Column 1: native playback, buffer, and the local media pipeline. */}
+          <div className="flex min-h-0 flex-col gap-4 overflow-hidden">
+            <section>
+              <h3 className="mb-1 text-xl font-bold text-blue-300">Playback</h3>
               <div>
-                error: {snapshot.videoErrorCode || 'n/a'} {snapshot.videoErrorMessage}
+                Time: {formatTime(snapshot.currentTime)} / {formatTime(snapshot.duration)}
               </div>
-            )}
-          </section>
+              <div>paused: {String(snapshot.paused)}</div>
+              <div>seeking: {String(snapshot.seeking)}</div>
+              <div>
+                readyState: {snapshot.readyState} {snapshot.readyStateLabel}
+              </div>
+              <div>
+                networkState: {snapshot.networkState} {snapshot.networkStateLabel}
+              </div>
+              <div>video error: {String(snapshot.videoError)}</div>
+              {snapshot.videoError && (
+                <div>
+                  error: {snapshot.videoErrorCode || 'n/a'} {snapshot.videoErrorMessage}
+                </div>
+              )}
+            </section>
 
-          <section>
-            <h3 className="mb-1 text-xl font-bold text-blue-300">Buffer</h3>
-            <div>ahead: {formatSeconds(snapshot.bufferAhead)}</div>
-            <div>current range: {formatRange(snapshot.matchingRange)}</div>
-            <div className={cx({ 'text-yellow-300': !snapshot.matchingRange })}>
-              position buffered: {snapshot.matchingRange ? 'yes' : 'no'}
-            </div>
-            <div>ranges: {formatRanges(snapshot.ranges)}</div>
-          </section>
+            <section>
+              <h3 className="mb-1 text-xl font-bold text-blue-300">Buffer</h3>
+              <div>ahead: {formatSeconds(snapshot.bufferAhead)}</div>
+              <div>current range: {formatRange(snapshot.matchingRange)}</div>
+              <div className={cx({ 'text-yellow-300': !snapshot.matchingRange })}>
+                position buffered: {snapshot.matchingRange ? 'yes' : 'no'}
+              </div>
+              <div>ranges: {formatRanges(snapshot.ranges)}</div>
+            </section>
 
-          <section>
-            <h3 className="mb-1 text-xl font-bold text-blue-300">HLS</h3>
-            <div>active: {String(snapshot.hls.active)}</div>
-            <div>selected quality: {target.selectedQuality ?? 'n/a'}</div>
-            <div>levels: {snapshot.hls.levelCount}</div>
-            <div>mode: {snapshot.hls.mode}</div>
-            <div>currentLevel: {snapshot.hls.currentLevel ?? 'n/a'}</div>
-            <div>nextLevel: {snapshot.hls.nextLevel ?? 'n/a'}</div>
-            <div>loadLevel: {snapshot.hls.loadLevel ?? 'n/a'}</div>
-            <div>autoLevelCapping: {snapshot.hls.autoLevelCapping ?? 'n/a'}</div>
-            <div>bandwidthEstimate: {formatBitrate(snapshot.hls.bandwidthEstimate)}</div>
-            <div>available: {snapshot.hls.levels.join(', ') || 'n/a'}</div>
-          </section>
+            <section>
+              <h3 className="mb-1 text-xl font-bold text-blue-300">Segment Pipeline</h3>
+              <div
+                className={cx({
+                  'text-yellow-300': Object.values(fragLoadStages).some((stage) => stage.status === 'loading'),
+                })}
+              >
+                load: {formatFragLoadStages(fragLoadStages)}
+              </div>
+              <div
+                className={cx({
+                  'text-yellow-300': Object.values(bufferAppendStages).some((stage) => stage.status === 'appending'),
+                })}
+              >
+                append: {formatBufferAppendStages(bufferAppendStages)}
+              </div>
+              <div>emergency aborts: {emergencyAbortCount}</div>
+            </section>
 
-          <section>
-            <h3 className="mb-1 text-xl font-bold text-blue-300">Last Fragment</h3>
-            <div>{formatLastFragment(lastFragment)}</div>
-            <div>last successful: {formatSeconds(lastSuccessfulFragmentAge)} ago</div>
-          </section>
+            <section>
+              <h3 className="mb-1 text-xl font-bold text-blue-300">Decode Quality</h3>
+              {snapshot.playbackQuality ? (
+                <>
+                  <div>frames: {snapshot.playbackQuality.totalVideoFrames}</div>
+                  <div>dropped: {snapshot.playbackQuality.droppedVideoFrames}</div>
+                  <div>dropped %: {snapshot.playbackQuality.droppedPercent.toFixed(2)}%</div>
+                </>
+              ) : (
+                <div>not available</div>
+              )}
+            </section>
+          </div>
 
-          <section>
-            <h3 className="mb-1 text-xl font-bold text-blue-300">Segment Pipeline</h3>
-            <div
-              className={cx({
-                'text-yellow-300': Object.values(fragLoadStages).some((stage) => stage.status === 'loading'),
-              })}
-            >
-              load: {formatFragLoadStages(fragLoadStages)}
-            </div>
-            <div
-              className={cx({
-                'text-yellow-300': Object.values(bufferAppendStages).some((stage) => stage.status === 'appending'),
-              })}
-            >
-              append: {formatBufferAppendStages(bufferAppendStages)}
-            </div>
-            <div>emergency aborts: {emergencyAbortCount}</div>
-          </section>
+          {/* Column 2: HLS level state, the fragment it produced, and failure totals. */}
+          <div className="flex min-h-0 flex-col gap-4 overflow-hidden">
+            <section>
+              <h3 className="mb-1 text-xl font-bold text-blue-300">HLS</h3>
+              <div>active: {String(snapshot.hls.active)}</div>
+              <div>selected quality: {target.selectedQuality ?? 'n/a'}</div>
+              <div>levels: {snapshot.hls.levelCount}</div>
+              <div>mode: {snapshot.hls.mode}</div>
+              <div>currentLevel: {snapshot.hls.currentLevel ?? 'n/a'}</div>
+              <div>nextLevel: {snapshot.hls.nextLevel ?? 'n/a'}</div>
+              <div>loadLevel: {snapshot.hls.loadLevel ?? 'n/a'}</div>
+              <div>autoLevelCapping: {snapshot.hls.autoLevelCapping ?? 'n/a'}</div>
+              <div>bandwidthEstimate: {formatBitrate(snapshot.hls.bandwidthEstimate)}</div>
+              <div>available: {snapshot.hls.levels.join(', ') || 'n/a'}</div>
+            </section>
 
-          <section>
-            <h3 className="mb-1 text-xl font-bold text-blue-300">Failure Summary</h3>
-            <div>network: {failureCounts.network}</div>
-            <div>buffer starvation: {failureCounts.buffer}</div>
-            <div>media/decode: {failureCounts.media}</div>
-            <div>other: {failureCounts.other}</div>
-            <div className={cx({ 'text-yellow-300': Boolean(lastFailure) })}>
-              last:{' '}
-              {lastFailure
-                ? `${formatCategoryLabel(lastFailure.category)}, ${formatSeconds((Date.now() - lastFailure.timestamp) / 1000)} ago`
-                : 'none'}
-            </div>
-          </section>
+            <section>
+              <h3 className="mb-1 text-xl font-bold text-blue-300">Last Fragment</h3>
+              <div>{formatLastFragment(lastFragment)}</div>
+              <div>last successful: {formatSeconds(lastSuccessfulFragmentAge)} ago</div>
+            </section>
 
-          <section>
-            <h3 className="mb-1 text-xl font-bold text-blue-300">Decode Quality</h3>
-            {snapshot.playbackQuality ? (
-              <>
-                <div>frames: {snapshot.playbackQuality.totalVideoFrames}</div>
-                <div>dropped: {snapshot.playbackQuality.droppedVideoFrames}</div>
-                <div>dropped %: {snapshot.playbackQuality.droppedPercent.toFixed(2)}%</div>
-              </>
-            ) : (
-              <div>not available</div>
-            )}
-          </section>
+            <section>
+              <h3 className="mb-1 text-xl font-bold text-blue-300">Failure Summary</h3>
+              <div>network: {failureCounts.network}</div>
+              <div>buffer starvation: {failureCounts.buffer}</div>
+              <div>media/decode: {failureCounts.media}</div>
+              <div>other: {failureCounts.other}</div>
+              <div className={cx({ 'text-yellow-300': Boolean(lastFailure) })}>
+                last:{' '}
+                {lastFailure
+                  ? `${formatCategoryLabel(lastFailure.category)}, ${formatSeconds((Date.now() - lastFailure.timestamp) / 1000)} ago`
+                  : 'none'}
+              </div>
+            </section>
+          </div>
 
-          <section>
+          {/* Column 3: the event history alone, so it gets the full column height. */}
+          <section className="flex min-h-0 flex-col overflow-hidden">
             <h3 className="mb-1 text-xl font-bold text-blue-300">Recent Events</h3>
-            <div className="max-h-58 overflow-hidden">
+            <div className="min-h-0 flex-1 overflow-hidden">
               {history
                 .slice()
                 .reverse()
