@@ -5,6 +5,7 @@ import forEach from 'lodash/forEach';
 
 import useStorageState from 'hooks/useStorageState';
 
+import { findLevelIndexForQuality } from 'utils/hlsLevels';
 import { convertToVTT } from 'utils/subtitles';
 
 export type AudioTrack = {
@@ -166,12 +167,9 @@ function useVideoPlayer({
         // For adaptive HLS (e.g. hls4): switch quality via HLS.js level
         // in place when the new track resolves to the same master playlist.
         if (hlsRef.current && hlsRef.current.levels.length > 1) {
-          const targetHeight = parseInt(sourceTrack.name);
-          if (!isNaN(targetHeight)) {
-            const levelIndex = hlsRef.current.levels.findIndex((l) => l.height === targetHeight);
-            if (levelIndex !== -1) {
-              hlsRef.current.currentLevel = levelIndex;
-            }
+          const levelIndex = findLevelIndexForQuality(hlsRef.current.levels, sourceTrack.name);
+          if (levelIndex !== -1) {
+            hlsRef.current.currentLevel = levelIndex;
           }
         }
       }
@@ -256,9 +254,8 @@ function useVideoPlayer({
             setQualityMode('fixed');
           }
 
-          const targetHeight = parseInt(currentSourceTrackRef.current?.name || '');
-          if (isAdaptive && !isNaN(targetHeight)) {
-            const levelIndex = hls.levels.findIndex((l) => l.height === targetHeight);
+          if (isAdaptive) {
+            const levelIndex = findLevelIndexForQuality(hls.levels, currentSourceTrackRef.current?.name || '');
             if (levelIndex !== -1) {
               hls.currentLevel = levelIndex;
             }
