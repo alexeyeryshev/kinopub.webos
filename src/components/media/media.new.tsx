@@ -135,10 +135,31 @@ function useVideoPlayer({
   // Mirrors qualityMode synchronously so a pending Auto request survives a
   // replacement manifest that is still loading (see setSourceTrack below).
   const qualityModeRef = useRef(qualityMode);
-  const recoveryRef = useRef<RecoveryState>({ attempts: 0, limit: RECOVERY_MAX_NETWORK_ATTEMPTS, exhausted: false });
-  // True only while a fatal-error retry is scheduled. The stall watchdog defers
-  // to that path, and must not be fooled by the recovery state it writes itself.
+  // Fatal-error recovery and the stall watchdog keep separate budgets. They
+  // recover from different failures and clear on different evidence -- a fatal
+  // retry is only proven good once the failing stream buffers, while the
+  // watchdog only needs playback to move again -- so sharing one record let
+  // each reset and inflate the other's attempt count.
+  const fatalRecoveryRef = useRef<RecoveryState>({ attempts: 0, limit: RECOVERY_MAX_NETWORK_ATTEMPTS, exhausted: false });
+  const stallRecoveryRef = useRef<RecoveryState>({ attempts: 0, limit: STALL_MAX_ACTIONS, exhausted: false });
+  // True only while a fatal-error retry is scheduled, so the watchdog can stand
+  // aside without reading state it writes itself.
   const fatalRetryPendingRef = useRef(false);
+  const currentAudioTrackIndexRef = useRef(0);
+
+  // The overlay shows one line, so surface whichever path acted most recently.
+  const getRecovery = useCallback(() => {
+    const fatal = fatalRecoveryRef.current;
+    const stall = stallRecoveryRef.current;
+    const fatalActive = fatal.attempts > 0 || fatal.exhausted;
+    const stallActive = stall.attempts > 0 || stall.exhausted;
+
+    if (fatalActive && stallActive) {
+      return (fatal.lastAt || 0) >= (stall.lastAt || 0) ? fatal : stall;
+    }
+
+    return stallActive ? stall : fatal;
+  }, []);
   const [currentAudioTrack, setCurrentAudioTrack] = useState<AudioTrack>(
     () => (audioTracks?.find((audioTrack) => audioTrack.default) || audioTracks?.[0])!,
   );
@@ -236,6 +257,7 @@ function useVideoPlayer({
     () => audioTracks?.findIndex((audioTrack) => audioTrack.name === currentAudioTrack.name) ?? 0,
     [audioTracks, currentAudioTrack],
   );
+  currentAudioTrackIndexRef.current = currentAudioTrackIndex;
   const currentSrc = useMemo(
     () =>
       streamingType === 'hls'
@@ -276,7 +298,8 @@ function useVideoPlayer({
       setIsAdaptiveLevel(false);
       qualityModeRef.current = 'fixed';
       setQualityMode('fixed');
-      recoveryRef.current = { attempts: 0, limit: RECOVERY_MAX_NETWORK_ATTEMPTS, exhausted: false };
+      fatalRecoveryRef.current = { attempts: 0, limit: RECOVERY_MAX_NETWORK_ATTEMPTS, exhausted: false };
+      stallRecoveryRef.current = { attempts: 0, limit: STALL_MAX_ACTIONS, exhausted: false };
       fatalRetryPendingRef.current = false;
 
       if (isHLSJSActive !== false && currentSrc.includes('.m3u8') && HLS.isSupported()) {
@@ -304,8 +327,8 @@ function useVideoPlayer({
           recoveringStream = undefined;
           mediaRecoveryAttempts = 0;
 
-          if (recoveryRef.current.attempts > 0 || recoveryRef.current.exhausted) {
-            recoveryRef.current = { ...recoveryRef.current, attempts: 0, exhausted: false };
+          if (fatalRecoveryRef.current.attempts > 0 || fatalRecoveryRef.current.exhausted) {
+            fatalRecoveryRef.current = { ...fatalRecoveryRef.current, attempts: 0, exhausted: false };
           }
         });
 
@@ -321,10 +344,10 @@ function useVideoPlayer({
           recoveringStream = data?.frag?.type || undefined;
 
           if (data.type === HLS.ErrorTypes.NETWORK_ERROR) {
-            const attempts = recoveryRef.current.attempts + 1;
+            const attempts = fatalRecoveryRef.current.attempts + 1;
 
             if (attempts > RECOVERY_MAX_NETWORK_ATTEMPTS) {
-              recoveryRef.current = {
+              fatalRecoveryRef.current = {
                 attempts: attempts - 1,
                 limit: RECOVERY_MAX_NETWORK_ATTEMPTS,
                 exhausted: true,
@@ -334,7 +357,7 @@ function useVideoPlayer({
               return;
             }
 
-            recoveryRef.current = {
+            fatalRecoveryRef.current = {
               attempts,
               limit: RECOVERY_MAX_NETWORK_ATTEMPTS,
               exhausted: false,
@@ -359,7 +382,7 @@ function useVideoPlayer({
             mediaRecoveryAttempts += 1;
 
             if (mediaRecoveryAttempts > RECOVERY_MAX_MEDIA_ATTEMPTS) {
-              recoveryRef.current = {
+              fatalRecoveryRef.current = {
                 attempts: RECOVERY_MAX_MEDIA_ATTEMPTS,
                 limit: RECOVERY_MAX_MEDIA_ATTEMPTS,
                 exhausted: true,
@@ -371,7 +394,7 @@ function useVideoPlayer({
 
             // Mirrored into the exposed state so the overlay reports decoder
             // recovery too, rather than sitting at `idle` through it.
-            recoveryRef.current = {
+            fatalRecoveryRef.current = {
               attempts: mediaRecoveryAttempts,
               limit: RECOVERY_MAX_MEDIA_ATTEMPTS,
               exhausted: false,
@@ -391,11 +414,20 @@ function useVideoPlayer({
 
           // Key-system, mux and other fatal errors have no documented in-place
           // recovery path, so record them instead of retrying blindly.
-          recoveryRef.current = { ...recoveryRef.current, exhausted: true, lastReason: reason, lastAt: Date.now() };
+          fatalRecoveryRef.current = { ...fatalRecoveryRef.current, exhausted: true, lastReason: reason, lastAt: Date.now() };
         });
         hls.on(HLS.Events.MANIFEST_PARSED, () => {
           const isAdaptive = hls.levels.length > 1;
           setIsAdaptiveLevel(isAdaptive);
+
+          // The watchdog's full reload rebuilds the manifest's audio-track
+          // state, and the effect that applies the user's choice is keyed by
+          // values that do not change here, so restore it alongside quality --
+          // otherwise recovery silently reverts to the default audio track.
+          const hlsAudioTrack = hls.audioTracks?.[currentAudioTrackIndexRef.current];
+          if (hlsAudioTrack) {
+            hls.audioTrack = hlsAudioTrack.id;
+          }
 
           if (isAdaptive && qualityModeRef.current === 'auto') {
             hls.currentLevel = -1;
@@ -498,10 +530,14 @@ function useVideoPlayer({
         stalledSince = undefined;
         restarted = false;
 
+        // Playback moving again is what this budget is spent against, so the
+        // reload allowance is restored too -- a later, unrelated stall gets a
+        // full budget rather than inheriting an already-survived one.
         actions = 0;
+        reloads = 0;
 
-        if (recoveryRef.current.exhausted || recoveryRef.current.attempts > 0) {
-          recoveryRef.current = { attempts: 0, limit: STALL_MAX_ACTIONS, exhausted: false };
+        if (stallRecoveryRef.current.exhausted || stallRecoveryRef.current.attempts > 0) {
+          stallRecoveryRef.current = { attempts: 0, limit: STALL_MAX_ACTIONS, exhausted: false };
         }
 
         return;
@@ -520,7 +556,7 @@ function useVideoPlayer({
       if (!restarted && stalledFor >= STALL_RESTART_AFTER) {
         restarted = true;
         actions += 1;
-        recoveryRef.current = {
+        stallRecoveryRef.current = {
           attempts: actions,
           limit: STALL_MAX_ACTIONS,
           exhausted: false,
@@ -536,7 +572,7 @@ function useVideoPlayer({
       }
 
       if (reloads >= STALL_MAX_RELOADS) {
-        recoveryRef.current = {
+        stallRecoveryRef.current = {
           attempts: actions,
           limit: STALL_MAX_ACTIONS,
           exhausted: true,
@@ -552,7 +588,7 @@ function useVideoPlayer({
       actions += 1;
       stalledSince = now;
       restarted = false;
-      recoveryRef.current = {
+      stallRecoveryRef.current = {
         attempts: actions,
         limit: STALL_MAX_ACTIONS,
         exhausted: false,
@@ -635,7 +671,7 @@ function useVideoPlayer({
     () => ({
       videoRef,
       hlsRef,
-      recoveryRef,
+      getRecovery,
       getAudioTracks,
       getAudioTrack,
       setAudioTrack,
@@ -649,7 +685,7 @@ function useVideoPlayer({
     [
       videoRef,
       hlsRef,
-      recoveryRef,
+      getRecovery,
       getAudioTracks,
       getAudioTrack,
       setAudioTrack,
@@ -763,7 +799,7 @@ function useVideoPlayerApi(ref: React.ForwardedRef<MediaRef>, props: OwnProps) {
         return player.hlsRef.current;
       },
       get recovery() {
-        return player.recoveryRef.current;
+        return player.getRecovery();
       },
       get currentTime() {
         return getCurrentTime();
