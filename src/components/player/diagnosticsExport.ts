@@ -116,6 +116,12 @@ export type ExportCapture = {
     totalFrames: number;
     droppedFrames: number;
   };
+  recovery?: {
+    attempts: number;
+    limit: number;
+    exhausted: boolean;
+    lastReason?: string;
+  };
   /** Newest first — see the delta encoding in `buildCompactText`. */
   events: ExportEvent[];
 };
@@ -200,6 +206,12 @@ export function buildCompactText(capture: ExportCapture) {
 
   if (capture.decode) {
     lines.push(`q|${capture.decode.totalFrames}|${capture.decode.droppedFrames}`);
+  }
+
+  if (capture.recovery) {
+    const r = capture.recovery;
+
+    lines.push(`r|${r.attempts}|${r.limit}|${bool(r.exhausted)}|${clean(r.lastReason)}`);
   }
 
   // Events must arrive newest-first: each delta counts milliseconds *backwards* from the previous

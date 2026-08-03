@@ -46,6 +46,8 @@ At each stall, record the last few overlay states:
 
 The earlier working hypothesis was buffer starvation rather than an obvious decoder or raw-bandwidth failure. Treat that as a hypothesis to verify, not as an implementation assumption.
 
+**Validated on the LG G5.** The hypothesis was wrong: this is not buffer starvation and not a bandwidth limit. Overlay captures show repeated `fragLoadError` / `HTTP 0` responses from the CDN host while `bandwidthEstimate` sat at 22-40 Mbps against a 2.1 Mbps top level. The freeze itself was an application defect rather than a network one: hls.js escalated to a _fatal_ network error, which permanently stops its loading engine, and the player had no `ERROR` handler, so nothing ever restarted it. The overlay showed the same fragment stuck `loading` for 100 s, no further `FRAG_LOADING` events, and failure counters frozen; seeking did not restart loading either. Fixed by driving recovery from the application (see item 4 notes). Still open: why the CDN returns `HTTP 0` in the first place.
+
 ### 2. P0 — Complete diagnostics around the HLS fragment lifecycle
 
 Implemented: the overlay now covers fragment load start/completion, buffer append start/completion,
@@ -86,6 +88,8 @@ The implementation must preserve the existing manual quality behavior while maki
 
 **Implemented**: [Make Auto/Fixed HLS quality mode explicit](https://github.com/kaaburgh/kinopub.webos/commit/6d5535df4215453ea8a5085d814924180812cef6). An explicit `Авто` option is now offered only when the loaded manifest turns out to be a genuine multi-level master playlist (checked after `MANIFEST_PARSED`), and selecting it delegates to HLS.js ABR (`currentLevel = -1`) instead of pinning a level. Fixed-quality selection is unchanged and deterministic, playback always starts pinned to the requested quality, and the selected mode/quality is now shown both in the player quality badge and the diagnostics overlay next to the existing HLS.js-derived mode. Still open: exposing the internal ABR levels of a master playlist as separate fixed choices, and the P0 on-device validation from item 1.
 
+**Follow-up fix**: on-device validation on the LG G5 showed fixed-quality selection had no effect at all — the diagnostics overlay reported `selected quality: 480p` while `currentLevel` stayed at the top level and `mode` stayed `auto`. Cause: levels were resolved by exact `level.height` equality against the API quality name, which only holds for 16:9 content. A 2.39:1 encode advertises 854x302 / 1280x536 / 1920x804 / 3840x1606 for what the API calls 480p / 720p / 1080p / 2160p, so no level ever matched, nothing was ever pinned, and HLS.js silently stayed in its default ABR mode. Levels are now normalized to the quality they actually represent (the larger of the advertised height and the 16:9-equivalent height implied by the width) and matched nearest-first, and the overlay shows both the normalized name and the real resolution per level.
+
 ### 4. P1 — Add controlled quality fallback after evidence is collected
 
 Only after the failure mode and Auto mode are validated, add automatic quality reduction for repeated playback problems.
@@ -101,6 +105,8 @@ The first version should be conservative:
 - show the reason and current mode in diagnostics.
 
 If a source cannot adapt in place, treat switching to another source URL as a separate implementation path rather than silently pretending it is ABR.
+
+**Partially implemented (recovery only, not quality fallback).** Fatal HLS errors are now recovered from: a fatal network error restarts loading with capped exponential backoff, and a fatal media error goes through `recoverMediaError` (plus `swapAudioCodec` on a second consecutive failure). The attempt budget resets once a fragment buffers, and the current recovery state and reason are shown in the overlay. Quality switching also moved from `currentLevel` to `nextLevel`, because `currentLevel` flushes the entire buffer to apply the switch instantly -- that is what converted a stream coasting through network failures on 82 s of buffer into an unrecoverable stall. The automatic _quality reduction_ described above is still open and deliberately separate from error recovery.
 
 ### 5. P1 — Reduce excessive subtitle brightness, especially in HDR
 

@@ -11,12 +11,14 @@ on:
 # `pull_request_target` runs with a writable token, so this workflow must never
 # check out or execute code from the pull request. It only calls the API.
 # Label creation/assignment lives under the Issues API (`issues.createLabel`,
-# `issues.addLabels`, `issues.removeLabel`, `issues.listEvents`), so it needs
-# `issues: write`; `pull-requests: write` alone returns 403 on those calls.
+# `issues.addLabels`, `issues.removeLabel`, `issues.listEvents`). Applying a
+# label to a pull request needs write on *both* resources -- neither alone is
+# enough, which the API states in the 403 response header it returns:
+# `x-accepted-github-permissions: issues=write; pull_requests=write`.
 permissions:
   contents: read
   issues: write
-  pull-requests: read
+  pull-requests: write
 
 concurrency:
   group: pr-labeler-${{ github.event.pull_request.number }}

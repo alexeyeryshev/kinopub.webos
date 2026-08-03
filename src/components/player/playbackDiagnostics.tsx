@@ -4,12 +4,14 @@ import cx from 'classnames';
 import HLS from 'hls.js';
 
 import Button from 'components/button';
+import { RecoveryState } from 'components/media';
 
 import { EncodedCapture, ExportCapture, encodeCapture } from './diagnosticsExport';
 import DiagnosticsQr from './diagnosticsQr';
 import { getVideoNode } from './getVideoNode';
 
 import { APP_VERSION } from 'utils/app';
+import { getLevelQualityHeight } from 'utils/hlsLevels';
 
 const HISTORY_LIMIT = 30;
 const VIDEO_EVENTS = ['playing', 'waiting', 'stalled', 'canplay', 'canplaythrough', 'seeking', 'seeked', 'error', 'ended'];
@@ -184,11 +186,32 @@ function formatBitrate(bitsPerSecond?: number) {
 }
 
 function formatLevel(level: any, index: number) {
+  const width = getFiniteNumber(level?.width);
   const height = getFiniteNumber(level?.height);
   const bitrate = getFiniteNumber(level?.bitrate);
-  const label = height ? `${height}p` : `level ${index}`;
+  // The quality name a level maps to can differ from its advertised height on
+  // letterboxed encodes, so show both: the name fixed-quality selection
+  // matches against, and the resolution the manifest actually advertises.
+  const qualityHeight = getLevelQualityHeight({ width, height });
+  const label = qualityHeight ? `${qualityHeight}p` : `level ${index}`;
+  const resolution = width && height ? ` (${width}x${height})` : '';
 
-  return bitrate ? `${label} / ${formatBitrate(bitrate)}` : label;
+  return bitrate ? `${label}${resolution} / ${formatBitrate(bitrate)}` : `${label}${resolution}`;
+}
+
+function formatRecovery(recovery?: RecoveryState) {
+  if (!recovery || (!recovery.attempts && !recovery.exhausted)) {
+    return 'idle';
+  }
+
+  const reason = recovery.lastReason ? `, ${recovery.lastReason}` : '';
+
+  if (recovery.exhausted) {
+    // No attempts means the error type had no recovery path to try at all.
+    return recovery.attempts ? `gave up after ${recovery.attempts}${reason}` : `unrecoverable${reason}`;
+  }
+
+  return `retry ${recovery.attempts}/${recovery.limit}${reason}`;
 }
 
 function getReadyStateLabel(value: number) {
@@ -555,6 +578,7 @@ function PlaybackDiagnosticsOverlay({ visible, exportVisible, onExportToggle, pl
   const [snapshot, setSnapshot] = useState<Nullable<PlaybackSnapshot>>(null);
   const [history, setHistory] = useState<DiagnosticHistoryItem[]>([]);
   const [lastFragment, setLastFragment] = useState<LastFragmentInfo | undefined>();
+  const [recovery, setRecovery] = useState<RecoveryState | undefined>();
   const [fragLoadStages, setFragLoadStages] = useState<FragLoadStagesByStream>({});
   const [bufferAppendStages, setBufferAppendStages] = useState<BufferAppendStagesByType>({});
   const [emergencyAbortCount, setEmergencyAbortCount] = useState(0);
@@ -752,7 +776,10 @@ function PlaybackDiagnosticsOverlay({ visible, exportVisible, onExportToggle, pl
       return;
     }
 
-    const updateSnapshot = () => setSnapshot(takeSnapshot(target.video, target.hls));
+    const updateSnapshot = () => {
+      setSnapshot(takeSnapshot(target.video, target.hls));
+      setRecovery(readMediaRef()?.recovery);
+    };
 
     updateSnapshot();
     const intervalId = setInterval(updateSnapshot, 1000);
@@ -760,7 +787,7 @@ function PlaybackDiagnosticsOverlay({ visible, exportVisible, onExportToggle, pl
     return () => {
       clearInterval(intervalId);
     };
-  }, [visible, target]);
+  }, [visible, target, readMediaRef]);
 
   const lastSuccessfulFragmentAge = lastFragment ? (Date.now() - lastFragment.timestamp) / 1000 : undefined;
 
@@ -834,6 +861,9 @@ function PlaybackDiagnosticsOverlay({ visible, exportVisible, onExportToggle, pl
         lastAgeSeconds: lastFailure ? (capturedAt - lastFailure.timestamp) / 1000 : undefined,
       },
       decode: quality ? { totalFrames: quality.totalVideoFrames, droppedFrames: quality.droppedVideoFrames } : undefined,
+      recovery: recovery
+        ? { attempts: recovery.attempts, limit: recovery.limit, exhausted: recovery.exhausted, lastReason: recovery.lastReason }
+        : undefined,
       events: history
         .slice()
         .reverse()
@@ -1039,6 +1069,9 @@ function PlaybackDiagnosticsOverlay({ visible, exportVisible, onExportToggle, pl
                 {lastFailure
                   ? `${formatCategoryLabel(lastFailure.category)}, ${formatSeconds((Date.now() - lastFailure.timestamp) / 1000)} ago`
                   : 'none'}
+              </div>
+              <div className={cx({ 'text-red-400': recovery?.exhausted, 'text-yellow-300': !recovery?.exhausted && recovery?.attempts })}>
+                recovery: {formatRecovery(recovery)}
               </div>
             </section>
           </div>

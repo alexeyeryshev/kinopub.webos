@@ -61,7 +61,8 @@ than by source:
 - column 1 — what the local pipeline is doing: `Playback`, `Buffer`, `Segment Pipeline`,
   `Decode Quality`;
 - column 2 — `Recent Events`, alone;
-- column 3 — what HLS chose and what came of it: `HLS`, `Last Fragment`, `Failure Summary`.
+- column 3 — what HLS chose and what came of it: `HLS`, `Last Fragment`, `Failure Summary`
+  (including the recovery budget).
 
 `Recent Events` gets a column to itself because it is the only unbounded section: sharing a column
 capped it to a handful of visible entries, which hid exactly the run-up to a stall that the history
@@ -314,3 +315,7 @@ in this script in the same commit.
 
 The export carries exactly what the overlay already displays, so the same rules apply without
 exception: hostnames only, never full URLs, query parameters, cookies, or tokens.
+
+That equivalence is the rule to hold to when the overlay grows: a panel added to the screen without a
+matching field in the capture makes the export quietly less useful than the screen it came from. The
+recovery state is carried on the `r|` line for this reason.

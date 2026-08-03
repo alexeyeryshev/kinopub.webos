@@ -200,6 +200,13 @@ function parseCompactText(text) {
       };
     } else if (tag === 'q') {
       report.decode = { totalFrames: Number(parts[1]), droppedFrames: Number(parts[2]) };
+    } else if (tag === 'r') {
+      report.recovery = {
+        attempts: Number(parts[1]),
+        limit: Number(parts[2]),
+        exhausted: parts[3] === '1',
+        lastReason: optional(parts[4]),
+      };
     } else if (tag === 'E') {
       // Deltas run backwards from the capture time, newest event first.
       clock -= Number(parts[1]);
@@ -284,6 +291,12 @@ function formatReport(report) {
 
   if (report.decode) {
     lines.push(`decode:   frames=${report.decode.totalFrames} dropped=${report.decode.droppedFrames}`);
+  }
+
+  if (report.recovery) {
+    const r = report.recovery;
+
+    lines.push(`recovery: attempts=${r.attempts}/${r.limit} exhausted=${r.exhausted}${r.lastReason ? ` reason=${r.lastReason}` : ''}`);
   }
 
   lines.push('');
