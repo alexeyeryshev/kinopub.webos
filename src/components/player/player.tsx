@@ -6,7 +6,7 @@ import { Item, Season, Video } from 'api';
 import BackButton from 'components/backButton';
 import Button from 'components/button';
 import EpisodePicker from 'components/episodePicker';
-import Media, { AudioTrack, SourceTrack, StreamingType, SubtitleTrack } from 'components/media';
+import Media, { AUTO_SOURCE_NAME, AudioTrack, SourceTrack, StreamingType, SubtitleTrack } from 'components/media';
 import Text from 'components/text';
 import useButtonEffect from 'hooks/useButtonEffect';
 import useStorageState from 'hooks/useStorageState';
@@ -66,7 +66,9 @@ const Player: React.FC<PlayerProps> = ({
   const [subtitleOpacity] = useStorageState<number>('subtitle_opacity', 1);
   const [currentSourceName, setCurrentSourceName] = useState<string | null>(null);
 
+  const isAutoQuality = currentSourceName === AUTO_SOURCE_NAME;
   const activeSource = sources?.find((s) => s.name === currentSourceName) || sources?.find((s) => s.default) || sources?.[0];
+  const qualityLabel = isAutoQuality ? `${AUTO_SOURCE_NAME} (${activeSource?.name})` : activeSource?.name;
   const isHDR =
     activeSource?.codec?.toLowerCase().includes('hevc') ||
     activeSource?.codec === 'h265' ||
@@ -211,7 +213,7 @@ const Player: React.FC<PlayerProps> = ({
         <div className="absolute z-10 top-0 px-4 pt-2 flex items-center">
           <BackButton className="mr-2" />
           <Text>{title}</Text>
-          {activeSource && <Text className="ml-3 px-2 py-0 text-xs font-bold rounded bg-gray-600 text-white">{activeSource.name}</Text>}
+          {qualityLabel && <Text className="ml-3 px-2 py-0 text-xs font-bold rounded bg-gray-600 text-white">{qualityLabel}</Text>}
           {isHDR && <Text className="ml-3 px-2 py-0 text-xs font-bold rounded bg-yellow-600 text-black">HDR</Text>}
         </div>
       )}

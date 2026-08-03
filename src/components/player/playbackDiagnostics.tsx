@@ -14,6 +14,7 @@ type Nullable<T> = T | null;
 type DiagnosticsTarget = {
   video: Nullable<HTMLVideoElement>;
   hls: Nullable<HLS>;
+  selectedQuality: Nullable<string>;
 };
 
 type DiagnosticHistoryItem = {
@@ -396,7 +397,7 @@ function getHlsEventDetails(name: string, data: any, hls: HLS) {
 }
 
 function PlaybackDiagnosticsOverlay({ visible, player }: Props) {
-  const [target, setTarget] = useState<DiagnosticsTarget>({ video: null, hls: null });
+  const [target, setTarget] = useState<DiagnosticsTarget>({ video: null, hls: null, selectedQuality: null });
   const [snapshot, setSnapshot] = useState<Nullable<PlaybackSnapshot>>(null);
   const [history, setHistory] = useState<DiagnosticHistoryItem[]>([]);
   const [lastFragment, setLastFragment] = useState<LastFragmentInfo | undefined>();
@@ -425,9 +426,14 @@ function PlaybackDiagnosticsOverlay({ visible, player }: Props) {
       const nextTarget = {
         video: media?.videoElement || null,
         hls: media?.hls || null,
+        selectedQuality: media?.sourceTrack || null,
       };
 
-      setTarget((current) => (current.video === nextTarget.video && current.hls === nextTarget.hls ? current : nextTarget));
+      setTarget((current) =>
+        current.video === nextTarget.video && current.hls === nextTarget.hls && current.selectedQuality === nextTarget.selectedQuality
+          ? current
+          : nextTarget,
+      );
     };
 
     syncTarget();
@@ -560,6 +566,7 @@ function PlaybackDiagnosticsOverlay({ visible, player }: Props) {
           <section>
             <h3 className="mb-1 text-xl font-bold text-blue-300">HLS</h3>
             <div>active: {String(snapshot.hls.active)}</div>
+            <div>selected quality: {target.selectedQuality ?? 'n/a'}</div>
             <div>levels: {snapshot.hls.levelCount}</div>
             <div>mode: {snapshot.hls.mode}</div>
             <div>currentLevel: {snapshot.hls.currentLevel ?? 'n/a'}</div>
