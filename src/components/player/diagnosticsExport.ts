@@ -344,9 +344,17 @@ export async function encodeCapture(capture: ExportCapture): Promise<EncodedCapt
     // Index and count are single digits, so the header cannot express more than MAX_CHUNKS parts.
     // Nobody is going to scan ten codes anyway: drop the oldest events and try again rather than
     // emit a payload the decoder would reject.
-    if (chunkCount > MAX_CHUNKS && events.length > 1) {
-      events = events.slice(0, Math.max(1, Math.floor(events.length / 2)));
-      continue;
+    if (chunkCount > MAX_CHUNKS) {
+      if (events.length > 0) {
+        // Halving reaches zero (floor(1 / 2) === 0), so this always terminates.
+        events = events.slice(0, Math.floor(events.length / 2));
+        continue;
+      }
+
+      // The snapshot alone is too large, so there is nothing left to trim. Fail loudly: emitting
+      // two-digit indices here would produce codes the reference decoder rejects by design, which
+      // is a worse outcome than telling the user the capture could not be encoded.
+      throw new Error(`Diagnostics capture needs ${chunkCount} QR codes, more than the ${MAX_CHUNKS} the format allows.`);
     }
 
     const chunks: string[] = [];

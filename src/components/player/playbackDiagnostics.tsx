@@ -561,6 +561,7 @@ function PlaybackDiagnosticsOverlay({ visible, exportVisible, onExportToggle, pl
   const [failureCounts, setFailureCounts] = useState<FailureCounts>({ network: 0, buffer: 0, media: 0, other: 0 });
   const [lastFailure, setLastFailure] = useState<Nullable<{ category: FailureCategory; timestamp: number }>>(null);
   const [encoded, setEncoded] = useState<Nullable<EncodedCapture>>(null);
+  const [encodeError, setEncodeError] = useState<Nullable<string>>(null);
   const nextHistoryId = useRef(1);
   const pendingAppendStarts = useRef<Map<string, number>>(new Map());
 
@@ -766,6 +767,7 @@ function PlaybackDiagnosticsOverlay({ visible, exportVisible, onExportToggle, pl
   useEffect(() => {
     if (!exportVisible) {
       setEncoded(null);
+      setEncodeError(null);
 
       return;
     }
@@ -840,11 +842,20 @@ function PlaybackDiagnosticsOverlay({ visible, exportVisible, onExportToggle, pl
 
     let cancelled = false;
 
-    encodeCapture(capture).then((result) => {
-      if (!cancelled) {
-        setEncoded(result);
-      }
-    });
+    encodeCapture(capture).then(
+      (result) => {
+        if (!cancelled) {
+          setEncoded(result);
+        }
+      },
+      (error) => {
+        // encodeCapture refuses to emit a payload its own decoder would reject, so surface that
+        // rather than showing an empty pane.
+        if (!cancelled) {
+          setEncodeError(error?.message || 'Не удалось закодировать диагностику');
+        }
+      },
+    );
 
     return () => {
       cancelled = true;
@@ -862,7 +873,8 @@ function PlaybackDiagnosticsOverlay({ visible, exportVisible, onExportToggle, pl
       <div className="pointer-events-none absolute z-101 top-14 left-6 right-6 bottom-6 flex flex-col items-center justify-center rounded bg-black bg-opacity-90 p-4 text-white ring">
         <div className="mb-3 text-2xl font-bold">Экспорт диагностики</div>
 
-        {!encoded && <div className="text-xl">Готовим данные…</div>}
+        {!encoded && !encodeError && <div className="text-xl">Готовим данные…</div>}
+        {encodeError && <div className="max-w-3xl text-center text-xl text-yellow-300">{encodeError}</div>}
 
         {encoded && (
           <>

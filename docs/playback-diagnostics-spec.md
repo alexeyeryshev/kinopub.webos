@@ -288,8 +288,14 @@ characters after deflate and Base32, and fits one 77x77-module QR at error-corre
 
 Each QR carries `KPD<version><D|P><index><count>.<base32>`, for example `KPD1D11.MFRGG…`. `D` marks
 a deflated body and `P` a plain one. Index and count are single digits, so a capture is limited to
-`MAX_CHUNKS` (9) codes; beyond that the encoder drops the oldest events, retries, and reports how
-many it dropped rather than emitting a payload the decoder would reject.
+`MAX_CHUNKS` (9) codes; beyond that the encoder halves the event history and retries, reporting how
+many events it dropped. If even a zero-event capture would not fit, it throws instead of emitting
+two-digit indices, and the export view shows the error: a payload the reference decoder rejects by
+design is worse than an honest failure.
+
+The decoder validates that every scanned chunk agrees on version, compression mode, and total count
+before joining any bodies. Chunks are scanned one at a time and can easily come from two different
+captures, and concatenating mismatched halves would yield a plausible-looking but corrupt report.
 
 ### Decoder
 

@@ -93,6 +93,23 @@ function parseChunks(inputs) {
 
   const { count, version, compressed } = parsed[0];
 
+  // Chunks are scanned one at a time and could easily come from two different captures. Their
+  // headers must agree before any bodies are joined, or mismatched halves concatenate into a
+  // plausible-looking but corrupt report.
+  parsed.forEach((chunk) => {
+    if (chunk.version !== version) {
+      throw new Error(`Chunks disagree on format version (${version} vs ${chunk.version}) — they are from different captures.`);
+    }
+
+    if (chunk.compressed !== compressed) {
+      throw new Error('Chunks disagree on compression mode — they are from different captures.');
+    }
+
+    if (chunk.count !== count) {
+      throw new Error(`Chunks disagree on total count (${count} vs ${chunk.count}) — they are from different captures.`);
+    }
+  });
+
   if (parsed.length !== count) {
     throw new Error(`Expected ${count} chunk(s), got ${parsed.length}.`);
   }
@@ -100,7 +117,7 @@ function parseChunks(inputs) {
   parsed.sort((a, b) => a.index - b.index);
   parsed.forEach((chunk, position) => {
     if (chunk.index !== position + 1) {
-      throw new Error(`Missing chunk ${position + 1} of ${count}.`);
+      throw new Error(`Missing chunk ${position + 1} of ${count}, or it was scanned twice.`);
     }
   });
 
