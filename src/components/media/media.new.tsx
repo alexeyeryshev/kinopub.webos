@@ -40,6 +40,21 @@ export type StreamingType = 'http' | 'hls' | 'hls2' | 'hls4';
  */
 export const AUTO_SOURCE_NAME = 'Авто';
 
+// A fatal hls.js error stops the loading engine for good: nothing reloads on
+// its own, and seeking does not restart it, so playback freezes until the
+// player is torn down. Recovery has to be driven by the application.
+export const RECOVERY_MAX_NETWORK_ATTEMPTS = 6;
+const RECOVERY_MAX_MEDIA_ATTEMPTS = 2;
+const RECOVERY_BASE_DELAY = 1000;
+const RECOVERY_MAX_DELAY = 8000;
+
+export type RecoveryState = {
+  attempts: number;
+  exhausted: boolean;
+  lastReason?: string;
+  lastAt?: number;
+};
+
 type OwnProps = {
   autoPlay?: boolean;
   audioTracks?: AudioTrack[];
@@ -61,6 +76,7 @@ export type MediaRef = {
   load: () => void;
   readonly videoElement: HTMLVideoElement | null;
   readonly hls: HLS | null;
+  readonly recovery: RecoveryState;
   currentTime: number;
   playbackRate: number;
   audioTracks?: AudioTrack[];
@@ -101,6 +117,7 @@ function useVideoPlayer({
   // Mirrors qualityMode synchronously so a pending Auto request survives a
   // replacement manifest that is still loading (see setSourceTrack below).
   const qualityModeRef = useRef(qualityMode);
+  const recoveryRef = useRef<RecoveryState>({ attempts: 0, exhausted: false });
   const [currentAudioTrack, setCurrentAudioTrack] = useState<AudioTrack>(
     () => (audioTracks?.find((audioTrack) => audioTrack.default) || audioTracks?.[0])!,
   );
@@ -150,7 +167,7 @@ function useVideoPlayer({
         setQualityMode('auto');
 
         if (hlsRef.current && hlsRef.current.levels.length > 1) {
-          hlsRef.current.currentLevel = -1;
+          hlsRef.current.nextLevel = -1;
         }
 
         return;
@@ -166,10 +183,15 @@ function useVideoPlayer({
 
         // For adaptive HLS (e.g. hls4): switch quality via HLS.js level
         // in place when the new track resolves to the same master playlist.
+        // `nextLevel` rather than `currentLevel`: the latter flushes the whole
+        // buffer to apply the switch instantly, which on a flaky CDN trades
+        // minutes of already-downloaded video for a stall it may not recover
+        // from. `nextLevel` keeps the fragment being played and switches from
+        // the next one.
         if (hlsRef.current && hlsRef.current.levels.length > 1) {
           const levelIndex = findLevelIndexForQuality(hlsRef.current.levels, sourceTrack.name);
           if (levelIndex !== -1) {
-            hlsRef.current.currentLevel = levelIndex;
+            hlsRef.current.nextLevel = levelIndex;
           }
         }
       }
@@ -221,6 +243,9 @@ function useVideoPlayer({
   }, [autoPlay]);
 
   useEffect(() => {
+    let recoveryTimeoutId: NodeJS.Timeout | undefined;
+    let mediaRecoveryAttempts = 0;
+
     if (videoRef.current && currentSrc) {
       // A freshly loaded source always starts pinned to the requested
       // fixed quality, matching the previous manual-selection behavior,
@@ -229,6 +254,7 @@ function useVideoPlayer({
       setIsAdaptiveLevel(false);
       qualityModeRef.current = 'fixed';
       setQualityMode('fixed');
+      recoveryRef.current = { attempts: 0, exhausted: false };
 
       if (isHLSJSActive !== false && currentSrc.includes('.m3u8') && HLS.isSupported()) {
         const hls = (hlsRef.current = new HLS({
@@ -238,6 +264,71 @@ function useVideoPlayer({
         hls.attachMedia(videoRef.current);
         hls.on(HLS.Events.MEDIA_ATTACHED, () => {
           hls.loadSource(currentSrc);
+        });
+
+        // A buffered fragment means the stream is healthy again, so the next
+        // unrelated failure starts from a full budget instead of inheriting
+        // the attempts an earlier, already-survived outage used up.
+        hls.on(HLS.Events.FRAG_BUFFERED, () => {
+          if (recoveryRef.current.attempts > 0 && !recoveryRef.current.exhausted) {
+            recoveryRef.current = { ...recoveryRef.current, attempts: 0 };
+          }
+          mediaRecoveryAttempts = 0;
+        });
+
+        hls.on(HLS.Events.ERROR, (_event, data: any) => {
+          // hls.js retries non-fatal errors internally; only fatal ones stop
+          // the loading engine and need the application to restart it.
+          if (!data?.fatal) {
+            return;
+          }
+
+          const reason = [data.type, data.details].filter(Boolean).join(' / ');
+
+          if (data.type === HLS.ErrorTypes.NETWORK_ERROR) {
+            const attempts = recoveryRef.current.attempts + 1;
+
+            if (attempts > RECOVERY_MAX_NETWORK_ATTEMPTS) {
+              recoveryRef.current = { attempts: attempts - 1, exhausted: true, lastReason: reason, lastAt: Date.now() };
+              return;
+            }
+
+            recoveryRef.current = { attempts, exhausted: false, lastReason: reason, lastAt: Date.now() };
+
+            // Back off so a CDN that is refusing every request is not hammered.
+            const delay = Math.min(RECOVERY_BASE_DELAY * 2 ** (attempts - 1), RECOVERY_MAX_DELAY);
+            recoveryTimeoutId = setTimeout(() => {
+              if (hlsRef.current === hls) {
+                hls.startLoad();
+              }
+            }, delay);
+
+            return;
+          }
+
+          if (data.type === HLS.ErrorTypes.MEDIA_ERROR) {
+            mediaRecoveryAttempts += 1;
+
+            if (mediaRecoveryAttempts > RECOVERY_MAX_MEDIA_ATTEMPTS) {
+              recoveryRef.current = { ...recoveryRef.current, exhausted: true, lastReason: reason, lastAt: Date.now() };
+              return;
+            }
+
+            recoveryRef.current = { ...recoveryRef.current, exhausted: false, lastReason: reason, lastAt: Date.now() };
+
+            // A second media error in a row usually means the audio codec is
+            // the one the decoder is choking on.
+            if (mediaRecoveryAttempts > 1) {
+              hls.swapAudioCodec();
+            }
+            hls.recoverMediaError();
+
+            return;
+          }
+
+          // Key-system, mux and other fatal errors have no documented in-place
+          // recovery path, so record them instead of retrying blindly.
+          recoveryRef.current = { ...recoveryRef.current, exhausted: true, lastReason: reason, lastAt: Date.now() };
         });
         hls.on(HLS.Events.MANIFEST_PARSED, () => {
           const isAdaptive = hls.levels.length > 1;
@@ -270,6 +361,11 @@ function useVideoPlayer({
     }
 
     return () => {
+      // Cleared before destroy() so a pending retry can never call startLoad()
+      // on a torn-down instance.
+      if (recoveryTimeoutId) {
+        clearTimeout(recoveryTimeoutId);
+      }
       if (videoRef.current) {
         if (videoRef.current.currentTime > 0) {
           // eslint-disable-next-line
@@ -352,6 +448,7 @@ function useVideoPlayer({
     () => ({
       videoRef,
       hlsRef,
+      recoveryRef,
       getAudioTracks,
       getAudioTrack,
       setAudioTrack,
@@ -365,6 +462,7 @@ function useVideoPlayer({
     [
       videoRef,
       hlsRef,
+      recoveryRef,
       getAudioTracks,
       getAudioTrack,
       setAudioTrack,
@@ -476,6 +574,9 @@ function useVideoPlayerApi(ref: React.ForwardedRef<MediaRef>, props: OwnProps) {
       },
       get hls() {
         return player.hlsRef.current;
+      },
+      get recovery() {
+        return player.recoveryRef.current;
       },
       get currentTime() {
         return getCurrentTime();

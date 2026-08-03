@@ -3,6 +3,8 @@ import { VideoPlayerBase } from '@enact/moonstone/VideoPlayer';
 import cx from 'classnames';
 import HLS from 'hls.js';
 
+import { RECOVERY_MAX_NETWORK_ATTEMPTS, RecoveryState } from 'components/media';
+
 import { getVideoNode } from './getVideoNode';
 
 import { getLevelQualityHeight } from 'utils/hlsLevels';
@@ -188,6 +190,20 @@ function formatLevel(level: any, index: number) {
   const resolution = width && height ? ` (${width}x${height})` : '';
 
   return bitrate ? `${label}${resolution} / ${formatBitrate(bitrate)}` : `${label}${resolution}`;
+}
+
+function formatRecovery(recovery?: RecoveryState) {
+  if (!recovery || (!recovery.attempts && !recovery.exhausted)) {
+    return 'idle';
+  }
+
+  const reason = recovery.lastReason ? `, ${recovery.lastReason}` : '';
+
+  if (recovery.exhausted) {
+    return `gave up after ${recovery.attempts}${reason}`;
+  }
+
+  return `retry ${recovery.attempts}/${RECOVERY_MAX_NETWORK_ATTEMPTS}${reason}`;
 }
 
 function getReadyStateLabel(value: number) {
@@ -554,6 +570,7 @@ function PlaybackDiagnosticsOverlay({ visible, player }: Props) {
   const [snapshot, setSnapshot] = useState<Nullable<PlaybackSnapshot>>(null);
   const [history, setHistory] = useState<DiagnosticHistoryItem[]>([]);
   const [lastFragment, setLastFragment] = useState<LastFragmentInfo | undefined>();
+  const [recovery, setRecovery] = useState<RecoveryState | undefined>();
   const [fragLoadStages, setFragLoadStages] = useState<FragLoadStagesByStream>({});
   const [bufferAppendStages, setBufferAppendStages] = useState<BufferAppendStagesByType>({});
   const [emergencyAbortCount, setEmergencyAbortCount] = useState(0);
@@ -749,7 +766,10 @@ function PlaybackDiagnosticsOverlay({ visible, player }: Props) {
       return;
     }
 
-    const updateSnapshot = () => setSnapshot(takeSnapshot(target.video, target.hls));
+    const updateSnapshot = () => {
+      setSnapshot(takeSnapshot(target.video, target.hls));
+      setRecovery(readMediaRef()?.recovery);
+    };
 
     updateSnapshot();
     const intervalId = setInterval(updateSnapshot, 1000);
@@ -757,7 +777,7 @@ function PlaybackDiagnosticsOverlay({ visible, player }: Props) {
     return () => {
       clearInterval(intervalId);
     };
-  }, [visible, target]);
+  }, [visible, target, readMediaRef]);
 
   const lastSuccessfulFragmentAge = lastFragment ? (Date.now() - lastFragment.timestamp) / 1000 : undefined;
 
@@ -857,6 +877,9 @@ function PlaybackDiagnosticsOverlay({ visible, player }: Props) {
               {lastFailure
                 ? `${formatCategoryLabel(lastFailure.category)}, ${formatSeconds((Date.now() - lastFailure.timestamp) / 1000)} ago`
                 : 'none'}
+            </div>
+            <div className={cx({ 'text-red-400': recovery?.exhausted, 'text-yellow-300': !recovery?.exhausted && recovery?.attempts })}>
+              recovery: {formatRecovery(recovery)}
             </div>
           </section>
 
