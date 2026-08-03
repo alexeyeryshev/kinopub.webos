@@ -3,7 +3,11 @@ import { VideoPlayerBase } from '@enact/moonstone/VideoPlayer';
 import cx from 'classnames';
 import HLS from 'hls.js';
 
+import { EncodedCapture, ExportCapture, encodeCapture } from './diagnosticsExport';
+import DiagnosticsQr from './diagnosticsQr';
 import { getVideoNode } from './getVideoNode';
+
+import { APP_VERSION } from 'utils/app';
 
 const HISTORY_LIMIT = 30;
 const VIDEO_EVENTS = ['playing', 'waiting', 'stalled', 'canplay', 'canplaythrough', 'seeking', 'seeked', 'error', 'ended'];
@@ -118,6 +122,8 @@ type PlaybackSnapshot = {
 
 type Props = {
   visible: boolean;
+  /** Replaces the panels with a scannable QR capture. Independent of `visible`. */
+  exportVisible: boolean;
   player: React.MutableRefObject<VideoPlayerBase | undefined>;
 };
 
@@ -541,7 +547,7 @@ function getHlsEventDetails(name: string, data: any, hls: HLS) {
   return undefined;
 }
 
-function PlaybackDiagnosticsOverlay({ visible, player }: Props) {
+function PlaybackDiagnosticsOverlay({ visible, exportVisible, player }: Props) {
   const [target, setTarget] = useState<DiagnosticsTarget>({ video: null, hls: null, selectedQuality: null });
   const [snapshot, setSnapshot] = useState<Nullable<PlaybackSnapshot>>(null);
   const [history, setHistory] = useState<DiagnosticHistoryItem[]>([]);
@@ -551,6 +557,7 @@ function PlaybackDiagnosticsOverlay({ visible, player }: Props) {
   const [emergencyAbortCount, setEmergencyAbortCount] = useState(0);
   const [failureCounts, setFailureCounts] = useState<FailureCounts>({ network: 0, buffer: 0, media: 0, other: 0 });
   const [lastFailure, setLastFailure] = useState<Nullable<{ category: FailureCategory; timestamp: number }>>(null);
+  const [encoded, setEncoded] = useState<Nullable<EncodedCapture>>(null);
   const nextHistoryId = useRef(1);
   const pendingAppendStarts = useRef<Map<string, number>>(new Map());
 
@@ -752,6 +759,134 @@ function PlaybackDiagnosticsOverlay({ visible, player }: Props) {
   }, [visible, target]);
 
   const lastSuccessfulFragmentAge = lastFragment ? (Date.now() - lastFragment.timestamp) / 1000 : undefined;
+
+  useEffect(() => {
+    if (!exportVisible) {
+      setEncoded(null);
+
+      return;
+    }
+
+    // Snapshot everything once, at the moment the user asks for it. Re-encoding on every state tick
+    // would change the QR while it is being scanned.
+    const capturedAt = Date.now();
+    const video = target.video;
+    const ranges = video ? getBufferedRanges(video) : [];
+    const matchingRange = video ? getMatchingRange(ranges, video.currentTime) : undefined;
+    const quality = video ? getPlaybackQuality(video) : undefined;
+    const hlsState = getHlsSnapshot(target.hls);
+
+    const capture: ExportCapture = {
+      capturedAt,
+      appVersion: APP_VERSION,
+      playback: video
+        ? {
+            currentTime: video.currentTime,
+            duration: video.duration,
+            paused: video.paused,
+            seeking: video.seeking,
+            readyState: video.readyState,
+            networkState: video.networkState,
+            videoErrorCode: video.error?.code,
+          }
+        : undefined,
+      buffer: video
+        ? {
+            ahead: matchingRange ? matchingRange.end - video.currentTime : undefined,
+            positionBuffered: Boolean(matchingRange),
+            ranges,
+          }
+        : undefined,
+      hls: {
+        active: hlsState.active,
+        selectedQuality: target.selectedQuality ?? undefined,
+        levelCount: hlsState.levelCount,
+        mode: hlsState.mode,
+        currentLevel: hlsState.currentLevel,
+        nextLevel: hlsState.nextLevel,
+        loadLevel: hlsState.loadLevel,
+        autoLevelCapping: hlsState.autoLevelCapping,
+        bandwidthEstimate: hlsState.bandwidthEstimate,
+        levels: hlsState.levels,
+      },
+      lastFragment: lastFragment
+        ? {
+            level: lastFragment.level,
+            height: lastFragment.height,
+            bytes: lastFragment.bytes,
+            loadSeconds: lastFragment.loadSeconds,
+            ageSeconds: (capturedAt - lastFragment.timestamp) / 1000,
+          }
+        : undefined,
+      pipeline: {
+        load: formatFragLoadStages(fragLoadStages),
+        append: formatBufferAppendStages(bufferAppendStages),
+        emergencyAborts: emergencyAbortCount,
+      },
+      failures: {
+        ...failureCounts,
+        lastCategory: lastFailure?.category,
+        lastAgeSeconds: lastFailure ? (capturedAt - lastFailure.timestamp) / 1000 : undefined,
+      },
+      decode: quality ? { totalFrames: quality.totalVideoFrames, droppedFrames: quality.droppedVideoFrames } : undefined,
+      events: history
+        .slice()
+        .reverse()
+        .map((item) => ({ timestamp: item.timestamp, source: item.source, name: item.name, details: item.details })),
+    };
+
+    let cancelled = false;
+
+    encodeCapture(capture).then((result) => {
+      if (!cancelled) {
+        setEncoded(result);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+    // Intentionally keyed only on `exportVisible`: the capture is a point-in-time snapshot and must
+    // stay frozen while the QR is on screen.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [exportVisible]);
+
+  if (exportVisible) {
+    const chunks = encoded?.chunks ?? [];
+    const size = Math.min(520, Math.floor(1500 / Math.max(1, chunks.length)));
+
+    return (
+      <div className="pointer-events-none absolute z-101 top-14 left-6 right-6 bottom-6 flex flex-col items-center justify-center rounded bg-black bg-opacity-90 p-4 text-white ring">
+        <div className="mb-3 text-2xl font-bold">Экспорт диагностики</div>
+
+        {!encoded && <div className="text-xl">Готовим данные…</div>}
+
+        {encoded && (
+          <>
+            <div className="flex items-start justify-center gap-6">
+              {chunks.map((chunk, index) => (
+                <div key={chunk.slice(0, 12)} className="flex flex-col items-center">
+                  <DiagnosticsQr value={chunk} size={size} />
+                  {chunks.length > 1 && (
+                    <div className="mt-2 text-lg">
+                      Часть {index + 1} из {chunks.length}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 text-lg text-gray-300">
+              Отсканируйте телефоном и передайте текст целиком. {encoded.encodedLength} симв.
+              {encoded.compressed ? ' (сжато)' : ' (без сжатия)'}
+              {encoded.droppedEvents > 0 ? `, старых событий отброшено: ${encoded.droppedEvents}` : ''}
+            </div>
+          </>
+        )}
+
+        <div className="mt-2 text-lg text-gray-300">Back: закрыть</div>
+      </div>
+    );
+  }
 
   if (!visible) {
     return null;

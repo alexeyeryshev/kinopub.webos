@@ -61,6 +61,7 @@ const Player: React.FC<PlayerProps> = ({
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isEpisodesOpen, setIsEpisodesOpen] = useState(false);
   const [isDiagnosticsVisible, setIsDiagnosticsVisible] = useState(false);
+  const [isDiagnosticsExportVisible, setIsDiagnosticsExportVisible] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(true);
   const [isPauseByOKClickActive] = useStorageState<boolean>('is_pause_by_ok_click_active');
   const [subtitleOpacity] = useStorageState<number>('subtitle_opacity', 1);
@@ -158,13 +159,25 @@ const Player: React.FC<PlayerProps> = ({
   const handleDiagnosticsToggle = useCallback(() => {
     setIsDiagnosticsVisible((visible) => !visible);
   }, []);
+  const handleDiagnosticsExportToggle = useCallback(() => {
+    setIsDiagnosticsExportVisible((visible) => !visible);
+  }, []);
   const handleDiagnosticsClose = useCallback(() => {
-    if (isDiagnosticsVisible && !isSettingsOpen && !isEpisodesOpen) {
-      setIsDiagnosticsVisible(false);
+    if (!isSettingsOpen && !isEpisodesOpen) {
+      // The export view sits on top of the panels, so Back peels it off first.
+      if (isDiagnosticsExportVisible) {
+        setIsDiagnosticsExportVisible(false);
 
-      return false;
+        return false;
+      }
+
+      if (isDiagnosticsVisible) {
+        setIsDiagnosticsVisible(false);
+
+        return false;
+      }
     }
-  }, [isDiagnosticsVisible, isSettingsOpen, isEpisodesOpen]);
+  }, [isDiagnosticsVisible, isDiagnosticsExportVisible, isSettingsOpen, isEpisodesOpen]);
 
   useEffect(() => {
     const styleId = 'subtitle-opacity-style';
@@ -206,9 +219,10 @@ const Player: React.FC<PlayerProps> = ({
         diagnosticsVisible={isDiagnosticsVisible}
         onClose={handleSettingsClose}
         onDiagnosticsToggle={handleDiagnosticsToggle}
+        onDiagnosticsExport={handleDiagnosticsExportToggle}
         player={playerRef}
       />
-      <PlaybackDiagnosticsOverlay visible={isDiagnosticsVisible} player={playerRef} />
+      <PlaybackDiagnosticsOverlay visible={isDiagnosticsVisible} exportVisible={isDiagnosticsExportVisible} player={playerRef} />
       {controlsVisible && (
         <div className="absolute z-10 top-0 px-4 pt-2 flex items-center">
           <BackButton className="mr-2" />

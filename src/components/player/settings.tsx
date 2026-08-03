@@ -24,10 +24,11 @@ type Props = {
   diagnosticsVisible: boolean;
   onClose: () => void;
   onDiagnosticsToggle: () => void;
+  onDiagnosticsExport: () => void;
   player: React.MutableRefObject<VideoPlayerBase | undefined>;
 };
 
-const Settings: React.FC<Props> = ({ visible, diagnosticsVisible, onClose, onDiagnosticsToggle, player }) => {
+const Settings: React.FC<Props> = ({ visible, diagnosticsVisible, onClose, onDiagnosticsToggle, onDiagnosticsExport, player }) => {
   const [isOpen, setIsOpen] = useState(visible);
   const [audios, setAudios] = useState<AudioTrack[]>([]);
   const [currentAudio, setCurrentAudio] = useState<string | null>(null);
@@ -95,6 +96,10 @@ const Settings: React.FC<Props> = ({ visible, diagnosticsVisible, onClose, onDia
     onDiagnosticsToggle();
     handleClose();
   }, [onDiagnosticsToggle, handleClose]);
+  const handleDiagnosticsExport = useCallback(() => {
+    onDiagnosticsExport();
+    handleClose();
+  }, [onDiagnosticsExport, handleClose]);
 
   useEffect(() => {
     if (visible && player.current) {
@@ -163,6 +168,9 @@ const Settings: React.FC<Props> = ({ visible, diagnosticsVisible, onClose, onDia
       )}
       <Button className="my-2 text-green-500" icon="bug_report" onClick={handleDiagnosticsToggle}>
         {diagnosticsVisible ? 'Скрыть диагностику воспроизведения' : 'Диагностика воспроизведения'}
+      </Button>
+      <Button className="my-2 text-green-500" icon="bug_report" onClick={handleDiagnosticsExport}>
+        Экспорт диагностики (QR)
       </Button>
     </Popup>
   );
