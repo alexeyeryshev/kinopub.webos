@@ -46,6 +46,8 @@ At each stall, record the last few overlay states:
 
 The earlier working hypothesis was buffer starvation rather than an obvious decoder or raw-bandwidth failure. Treat that as a hypothesis to verify, not as an implementation assumption.
 
+**Validated on the LG G5.** The hypothesis was wrong: this is not buffer starvation and not a bandwidth limit. Overlay captures show repeated `fragLoadError` / `HTTP 0` responses from the CDN host while `bandwidthEstimate` sat at 22-40 Mbps against a 2.1 Mbps top level. The freeze itself was an application defect rather than a network one: hls.js escalated to a _fatal_ network error, which permanently stops its loading engine, and the player had no `ERROR` handler, so nothing ever restarted it. The overlay showed the same fragment stuck `loading` for 100 s, no further `FRAG_LOADING` events, and failure counters frozen; seeking did not restart loading either. Fixed by driving recovery from the application (see item 4 notes). Still open: why the CDN returns `HTTP 0` in the first place.
+
 ### 2. P0 — Complete diagnostics around the HLS fragment lifecycle
 
 Implemented: the overlay now covers fragment load start/completion, buffer append start/completion,
@@ -103,6 +105,8 @@ The first version should be conservative:
 - show the reason and current mode in diagnostics.
 
 If a source cannot adapt in place, treat switching to another source URL as a separate implementation path rather than silently pretending it is ABR.
+
+**Partially implemented (recovery only, not quality fallback).** Fatal HLS errors are now recovered from: a fatal network error restarts loading with capped exponential backoff, and a fatal media error goes through `recoverMediaError` (plus `swapAudioCodec` on a second consecutive failure). The attempt budget resets once a fragment buffers, and the current recovery state and reason are shown in the overlay. Quality switching also moved from `currentLevel` to `nextLevel`, because `currentLevel` flushes the entire buffer to apply the switch instantly -- that is what converted a stream coasting through network failures on 82 s of buffer into an unrecoverable stall. The automatic _quality reduction_ described above is still open and deliberately separate from error recovery.
 
 ### 5. P1 — Reduce excessive subtitle brightness, especially in HDR
 
