@@ -43,13 +43,16 @@ export const AUTO_SOURCE_NAME = 'Авто';
 // A fatal hls.js error stops the loading engine for good: nothing reloads on
 // its own, and seeking does not restart it, so playback freezes until the
 // player is torn down. Recovery has to be driven by the application.
-export const RECOVERY_MAX_NETWORK_ATTEMPTS = 6;
+const RECOVERY_MAX_NETWORK_ATTEMPTS = 6;
 const RECOVERY_MAX_MEDIA_ATTEMPTS = 2;
 const RECOVERY_BASE_DELAY = 1000;
 const RECOVERY_MAX_DELAY = 8000;
 
 export type RecoveryState = {
   attempts: number;
+  // The cap that applies to `attempts`, which differs between network and
+  // media recovery, so the overlay can render the budget without guessing.
+  limit: number;
   exhausted: boolean;
   lastReason?: string;
   lastAt?: number;
@@ -117,7 +120,7 @@ function useVideoPlayer({
   // Mirrors qualityMode synchronously so a pending Auto request survives a
   // replacement manifest that is still loading (see setSourceTrack below).
   const qualityModeRef = useRef(qualityMode);
-  const recoveryRef = useRef<RecoveryState>({ attempts: 0, exhausted: false });
+  const recoveryRef = useRef<RecoveryState>({ attempts: 0, limit: RECOVERY_MAX_NETWORK_ATTEMPTS, exhausted: false });
   const [currentAudioTrack, setCurrentAudioTrack] = useState<AudioTrack>(
     () => (audioTracks?.find((audioTrack) => audioTrack.default) || audioTracks?.[0])!,
   );
@@ -245,6 +248,7 @@ function useVideoPlayer({
   useEffect(() => {
     let recoveryTimeoutId: NodeJS.Timeout | undefined;
     let mediaRecoveryAttempts = 0;
+    let recoveringStream: string | undefined;
 
     if (videoRef.current && currentSrc) {
       // A freshly loaded source always starts pinned to the requested
@@ -254,7 +258,7 @@ function useVideoPlayer({
       setIsAdaptiveLevel(false);
       qualityModeRef.current = 'fixed';
       setQualityMode('fixed');
-      recoveryRef.current = { attempts: 0, exhausted: false };
+      recoveryRef.current = { attempts: 0, limit: RECOVERY_MAX_NETWORK_ATTEMPTS, exhausted: false };
 
       if (isHLSJSActive !== false && currentSrc.includes('.m3u8') && HLS.isSupported()) {
         const hls = (hlsRef.current = new HLS({
@@ -269,11 +273,21 @@ function useVideoPlayer({
         // A buffered fragment means the stream is healthy again, so the next
         // unrelated failure starts from a full budget instead of inheriting
         // the attempts an earlier, already-survived outage used up.
-        hls.on(HLS.Events.FRAG_BUFFERED, () => {
-          if (recoveryRef.current.attempts > 0 && !recoveryRef.current.exhausted) {
-            recoveryRef.current = { ...recoveryRef.current, attempts: 0 };
+        hls.on(HLS.Events.FRAG_BUFFERED, (_event, data: any) => {
+          // Main and audio fragments load independently, so only the stream
+          // that was failing proves recovery. Without this, a healthy audio
+          // fragment would clear the budget the main stream is still burning
+          // through, pinning it at attempt 1 and retrying every second forever.
+          if (recoveringStream && data?.frag?.type && data.frag.type !== recoveringStream) {
+            return;
           }
+
+          recoveringStream = undefined;
           mediaRecoveryAttempts = 0;
+
+          if (recoveryRef.current.attempts > 0 || recoveryRef.current.exhausted) {
+            recoveryRef.current = { ...recoveryRef.current, attempts: 0, exhausted: false };
+          }
         });
 
         hls.on(HLS.Events.ERROR, (_event, data: any) => {
@@ -284,16 +298,30 @@ function useVideoPlayer({
           }
 
           const reason = [data.type, data.details].filter(Boolean).join(' / ');
+          // Remembered so only this stream's own recovery clears the budget.
+          recoveringStream = data?.frag?.type || undefined;
 
           if (data.type === HLS.ErrorTypes.NETWORK_ERROR) {
             const attempts = recoveryRef.current.attempts + 1;
 
             if (attempts > RECOVERY_MAX_NETWORK_ATTEMPTS) {
-              recoveryRef.current = { attempts: attempts - 1, exhausted: true, lastReason: reason, lastAt: Date.now() };
+              recoveryRef.current = {
+                attempts: attempts - 1,
+                limit: RECOVERY_MAX_NETWORK_ATTEMPTS,
+                exhausted: true,
+                lastReason: reason,
+                lastAt: Date.now(),
+              };
               return;
             }
 
-            recoveryRef.current = { attempts, exhausted: false, lastReason: reason, lastAt: Date.now() };
+            recoveryRef.current = {
+              attempts,
+              limit: RECOVERY_MAX_NETWORK_ATTEMPTS,
+              exhausted: false,
+              lastReason: reason,
+              lastAt: Date.now(),
+            };
 
             // Back off so a CDN that is refusing every request is not hammered.
             const delay = Math.min(RECOVERY_BASE_DELAY * 2 ** (attempts - 1), RECOVERY_MAX_DELAY);
@@ -310,11 +338,25 @@ function useVideoPlayer({
             mediaRecoveryAttempts += 1;
 
             if (mediaRecoveryAttempts > RECOVERY_MAX_MEDIA_ATTEMPTS) {
-              recoveryRef.current = { ...recoveryRef.current, exhausted: true, lastReason: reason, lastAt: Date.now() };
+              recoveryRef.current = {
+                attempts: RECOVERY_MAX_MEDIA_ATTEMPTS,
+                limit: RECOVERY_MAX_MEDIA_ATTEMPTS,
+                exhausted: true,
+                lastReason: reason,
+                lastAt: Date.now(),
+              };
               return;
             }
 
-            recoveryRef.current = { ...recoveryRef.current, exhausted: false, lastReason: reason, lastAt: Date.now() };
+            // Mirrored into the exposed state so the overlay reports decoder
+            // recovery too, rather than sitting at `idle` through it.
+            recoveryRef.current = {
+              attempts: mediaRecoveryAttempts,
+              limit: RECOVERY_MAX_MEDIA_ATTEMPTS,
+              exhausted: false,
+              lastReason: reason,
+              lastAt: Date.now(),
+            };
 
             // A second media error in a row usually means the audio codec is
             // the one the decoder is choking on.

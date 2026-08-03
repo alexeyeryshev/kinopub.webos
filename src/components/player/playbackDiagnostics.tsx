@@ -3,7 +3,7 @@ import { VideoPlayerBase } from '@enact/moonstone/VideoPlayer';
 import cx from 'classnames';
 import HLS from 'hls.js';
 
-import { RECOVERY_MAX_NETWORK_ATTEMPTS, RecoveryState } from 'components/media';
+import { RecoveryState } from 'components/media';
 
 import { getVideoNode } from './getVideoNode';
 
@@ -200,10 +200,11 @@ function formatRecovery(recovery?: RecoveryState) {
   const reason = recovery.lastReason ? `, ${recovery.lastReason}` : '';
 
   if (recovery.exhausted) {
-    return `gave up after ${recovery.attempts}${reason}`;
+    // No attempts means the error type had no recovery path to try at all.
+    return recovery.attempts ? `gave up after ${recovery.attempts}${reason}` : `unrecoverable${reason}`;
   }
 
-  return `retry ${recovery.attempts}/${RECOVERY_MAX_NETWORK_ATTEMPTS}${reason}`;
+  return `retry ${recovery.attempts}/${recovery.limit}${reason}`;
 }
 
 function getReadyStateLabel(value: number) {
