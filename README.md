@@ -4,22 +4,15 @@ A Kinopub client for LG Smart TVs with WebOS - using EnactJS, Moonstone
 
 ## Requirements
 
-- LG Smart TV with WebOS v3+
-- [WebOS CLI](https://webostv.developer.lge.com/sdk/installation/)
+- Node.js and Yarn Classic for building the application;
+- an LG Smart TV with webOS v3+ and the [Developer Mode app](https://webostv.developer.lge.com/develop/getting-started/developer-mode-app) for installing a development build;
+- the [webOS CLI](https://webostv.developer.lge.com/develop/tools/cli-installation/) or the project-local `ares-*` commands installed by `yarn install`.
 
-or
-
-- Smart TV with Media Station X
+The complete build, package, TV setup, installation, and smoke-test procedure is documented in [Build and install from source](./docs/build-and-install.md). It does not depend on a release or instructions from the original repository.
 
 ## Installation
 
-[Follow this instruction](https://webostv.developer.lge.com/develop/app-test) to prepare your LG Smart TV  
-[Следуйте этой инструкции](https://bit.ly/3uyLWkl) чтобы подготовить ваш LG Smart TV
-
-- Download [latest ipk file](https://github.com/adascal/kinopub.webos/releases/latest)
-- `$ ares-install --device $DEVICE_NAME $PATH_TO_IPK_FILE`
-
-[Следуйте этой инструкции](https://bit.ly/3s4YoYg) чтобы установить через Media Station X
+For a pre-built package, use a release from this fork when one is available. To build and install the current source yourself, follow [Build and install from source](./docs/build-and-install.md).
 
 ## Screenshots
 
