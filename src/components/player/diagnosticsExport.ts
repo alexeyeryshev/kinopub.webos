@@ -260,8 +260,16 @@ function utf8Bytes(text: string) {
   return bytes;
 }
 
+// Not in the DOM lib of the pinned TypeScript, and absent on older webOS browsers, so it is
+// declared here and always reached through a `typeof` guard.
+declare const CompressionStream:
+  | (new (format: string) => { readable: ReadableStream<Uint8Array>; writable: WritableStream<Uint8Array> })
+  | undefined;
+
 async function deflate(bytes: Uint8Array) {
-  const CompressionStreamCtor = (globalThis as any).CompressionStream;
+  // `typeof` rather than a `globalThis` lookup: older webOS browsers predate `globalThis`, and this
+  // must not depend on core-js having been loaded first.
+  const CompressionStreamCtor = typeof CompressionStream === 'undefined' ? undefined : CompressionStream;
 
   if (!CompressionStreamCtor) {
     return null;
@@ -284,7 +292,10 @@ async function deflate(bytes: Uint8Array) {
         break;
       }
 
-      chunks.push(value);
+      // A non-final read can still yield no chunk; only the `done` flag ends the stream.
+      if (value) {
+        chunks.push(value);
+      }
     }
 
     const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
