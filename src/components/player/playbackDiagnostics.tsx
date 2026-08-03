@@ -5,6 +5,8 @@ import HLS from 'hls.js';
 
 import { getVideoNode } from './getVideoNode';
 
+import { getLevelQualityHeight } from 'utils/hlsLevels';
+
 const HISTORY_LIMIT = 30;
 const VIDEO_EVENTS = ['playing', 'waiting', 'stalled', 'canplay', 'canplaythrough', 'seeking', 'seeked', 'error', 'ended'];
 const HLS_EVENT_KEYS = [
@@ -175,11 +177,17 @@ function formatBitrate(bitsPerSecond?: number) {
 }
 
 function formatLevel(level: any, index: number) {
+  const width = getFiniteNumber(level?.width);
   const height = getFiniteNumber(level?.height);
   const bitrate = getFiniteNumber(level?.bitrate);
-  const label = height ? `${height}p` : `level ${index}`;
+  // The quality name a level maps to can differ from its advertised height on
+  // letterboxed encodes, so show both: the name fixed-quality selection
+  // matches against, and the resolution the manifest actually advertises.
+  const qualityHeight = getLevelQualityHeight({ width, height });
+  const label = qualityHeight ? `${qualityHeight}p` : `level ${index}`;
+  const resolution = width && height ? ` (${width}x${height})` : '';
 
-  return bitrate ? `${label} / ${formatBitrate(bitrate)}` : label;
+  return bitrate ? `${label}${resolution} / ${formatBitrate(bitrate)}` : `${label}${resolution}`;
 }
 
 function getReadyStateLabel(value: number) {
