@@ -1,0 +1,208 @@
+name: PR labeler
+
+# `.github/release-drafter.yml` groups release notes by label, but pull requests
+# here are opened without labels, so every entry lands in the uncategorized
+# section. This applies one category label per pull request, derived from its
+# title prefix, its branch name, or the kind of files it touches.
+on:
+  pull_request_target:
+    types: [opened, reopened, edited, synchronize]
+
+# `pull_request_target` runs with a writable token, so this workflow must never
+# check out or execute code from the pull request. It only calls the API.
+# Label creation/assignment lives under the Issues API (`issues.createLabel`,
+# `issues.addLabels`, `issues.removeLabel`, `issues.listEvents`), so it needs
+# `issues: write`; `pull-requests: write` alone returns 403 on those calls.
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: pr-labeler-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  label:
+    name: Apply a category label
+    runs-on: ubuntu-latest
+    steps:
+      - name: Label the pull request
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const CATEGORIES = {
+              feature: { color: '0e8a16', description: 'New or improved functionality' },
+              fix: { color: 'd73a4a', description: 'Bug fix' },
+              documentation: { color: '0075ca', description: 'Documentation only' },
+              chore: { color: 'cfd3d7', description: 'Maintenance, tooling and CI' },
+            };
+            const TITLE_PREFIXES = {
+              feat: 'feature',
+              feature: 'feature',
+              fix: 'fix',
+              bugfix: 'fix',
+              perf: 'feature',
+              docs: 'documentation',
+              doc: 'documentation',
+              chore: 'chore',
+              ci: 'chore',
+              build: 'chore',
+              refactor: 'chore',
+              style: 'chore',
+              test: 'chore',
+            };
+            // Titles in this repository are imperative sentences ("Add ...",
+            // "Fix ...", "Document ...") rather than conventional-commit
+            // prefixes, so the leading verb is the most reliable signal.
+            const TITLE_VERBS = {
+              add: 'feature',
+              allow: 'feature',
+              enable: 'feature',
+              expand: 'feature',
+              extend: 'feature',
+              implement: 'feature',
+              improve: 'feature',
+              introduce: 'feature',
+              make: 'feature',
+              redesign: 'feature',
+              show: 'feature',
+              support: 'feature',
+              avoid: 'fix',
+              correct: 'fix',
+              fix: 'fix',
+              prevent: 'fix',
+              repair: 'fix',
+              resolve: 'fix',
+              restore: 'fix',
+              clarify: 'documentation',
+              describe: 'documentation',
+              document: 'documentation',
+              bump: 'chore',
+              clean: 'chore',
+              drop: 'chore',
+              migrate: 'chore',
+              pin: 'chore',
+              refactor: 'chore',
+              remove: 'chore',
+              rename: 'chore',
+              revert: 'chore',
+              update: 'chore',
+              upgrade: 'chore',
+            };
+            const BRANCH_KEYWORDS = [
+              [/(^|[/-])(fix|bug|bugfix|hotfix)([/-]|$)/, 'fix'],
+              [/(^|[/-])(feat|feature)([/-]|$)/, 'feature'],
+              [/(^|[/-])(docs?|documentation)([/-]|$)/, 'documentation'],
+              [/(^|[/-])(chore|ci|build|refactor)([/-]|$)/, 'chore'],
+            ];
+
+            const { owner, repo } = context.repo;
+            const pull = context.payload.pull_request;
+            const known = Object.keys(CATEGORIES);
+            const existingCategories = (pull.labels || []).map((label) => label.name).filter((name) => known.includes(name));
+
+            // A category label a human applied by hand is a deliberate choice and
+            // must never be silently replaced. A category label this workflow
+            // applied on an earlier run is safe to recompute, since a pushed
+            // commit or an edited title can change which category actually fits
+            // (a documentation-only PR that later gains code, for example).
+            // The two are told apart by who last added the label, via the
+            // issue's `labeled` timeline events.
+            const wasLabeledByThisWorkflow = async (labelName) => {
+              const events = await github.paginate(
+                github.rest.issues.listEvents,
+                { owner, repo, issue_number: pull.number, per_page: 100 },
+                (response) => response.data,
+              );
+              const labelEvents = events.filter((event) => event.event === 'labeled' && event.label?.name === labelName);
+              const last = labelEvents[labelEvents.length - 1];
+
+              return last?.actor?.login === 'github-actions[bot]';
+            };
+
+            if (existingCategories.length) {
+              const appliedByThisWorkflow = await Promise.all(existingCategories.map(wasLabeledByThisWorkflow));
+
+              if (!appliedByThisWorkflow.every(Boolean)) {
+                core.info(`Pull request has a manually-set category label, leaving it alone: ${existingCategories.join(', ')}`);
+                return;
+              }
+            }
+
+            const fromTitlePrefix = () => {
+              const match = /^\s*([a-z]+)(\([^)]*\))?!?:/i.exec(pull.title || '');
+              return match ? TITLE_PREFIXES[match[1].toLowerCase()] : undefined;
+            };
+
+            const fromTitleVerb = () => {
+              const match = /^\s*([a-z]+)\b/i.exec(pull.title || '');
+              return match ? TITLE_VERBS[match[1].toLowerCase()] : undefined;
+            };
+
+            const fromBranch = () => {
+              const branch = (pull.head && pull.head.ref ? pull.head.ref : '').toLowerCase();
+              const matched = BRANCH_KEYWORDS.find(([pattern]) => pattern.test(branch));
+              return matched ? matched[1] : undefined;
+            };
+
+            // A change touching only Markdown is documentation regardless of how
+            // it is named. Capped at the first 100 files, which is well past the
+            // size at which a change is still documentation only.
+            const fromFiles = async () => {
+              const files = await github.paginate(github.rest.pulls.listFiles, {
+                owner,
+                repo,
+                pull_number: pull.number,
+                per_page: 100,
+              }, (response) => response.data.map((file) => file.filename));
+
+              if (!files.length || files.length > 100) {
+                return undefined;
+              }
+              return files.every((name) => name.toLowerCase().endsWith('.md')) ? 'documentation' : undefined;
+            };
+
+            // Documentation-only changes win over the title verb: "Add a
+            // troubleshooting section" is documentation, not a feature.
+            const category = fromTitlePrefix() || (await fromFiles()) || fromTitleVerb() || fromBranch();
+            if (!category) {
+              core.info('No category could be derived from the title, branch or changed files.');
+              return;
+            }
+
+            if (existingCategories.includes(category)) {
+              core.info(`Pull request is already labeled ${category}.`);
+              return;
+            }
+
+            // Drop stale category labels this workflow applied earlier before
+            // adding the newly derived one, so a PR only ever carries one.
+            for (const staleCategory of existingCategories) {
+              await github.rest.issues.removeLabel({ owner, repo, issue_number: pull.number, name: staleCategory });
+            }
+
+            // Adding a label that does not exist yet fails, so create it first.
+            try {
+              await github.rest.issues.getLabel({ owner, repo, name: category });
+            } catch (error) {
+              if (error.status !== 404) {
+                throw error;
+              }
+              await github.rest.issues.createLabel({
+                owner,
+                repo,
+                name: category,
+                color: CATEGORIES[category].color,
+                description: CATEGORIES[category].description,
+              });
+              core.info(`Created missing label ${category}.`);
+            }
+
+            await github.rest.issues.addLabels({
+              owner,
+              repo,
+              issue_number: pull.number,
+              labels: [category],
+            });
+            core.info(`Labeled pull request #${pull.number} as ${category}.`);

@@ -1,0 +1,31 @@
+name: Setup Node.js and Yarn
+description: >-
+  Installs the Node.js version this project builds with and restores the Yarn
+  cache before installing dependencies from the committed lockfile.
+
+inputs:
+  install:
+    description: Whether to run `yarn install --frozen-lockfile`.
+    required: false
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    # Node.js 14, matching `.nvmrc` (`lts/fermium`). The pinned react-scripts 4 /
+    # webpack 4 toolchain fails on Node.js 17+ with ERR_OSSL_EVP_UNSUPPORTED, so
+    # this version is a build requirement rather than a preference. Keep it in
+    # sync with `.nvmrc` when the toolchain is upgraded.
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '14'
+        cache: yarn
+
+    - name: Install dependencies
+      if: inputs.install == 'true'
+      shell: bash
+      run: yarn install --frozen-lockfile
+      # Git hooks are pointless in CI; skip the Husky `prepare` script.
+      env:
+        HUSKY: '0'

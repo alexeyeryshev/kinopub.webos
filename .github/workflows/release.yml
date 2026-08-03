@@ -1,0 +1,64 @@
+name: Release IPK
+
+# The release drafter keeps a draft release up to date, but nothing attached an
+# installable package to it, so a release carried notes and no IPK. This builds
+# the packages from the released tag and uploads them as release assets.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to build and attach packages to (for example v1.3.0).
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  publish_packages:
+    name: Build and attach packages
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - name: Checkout the released tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+
+      # IPK file names come from the `package.json` version, not from the tag.
+      # If the two disagree, the release would carry assets named after another
+      # version, so stop before anything is built.
+      - name: Check the tag matches the app version
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "v${version}" ] && [ "$TAG" != "${version}" ]; then
+            echo "Tag $TAG does not match package.json version ${version}."
+            echo "Bump the version in package.json or retag the release before publishing."
+            exit 1
+          fi
+
+      - name: Setup Node.js and Yarn
+        uses: ./.github/actions/setup-node-yarn
+
+      - name: Build app
+        run: yarn build
+
+      - name: Package app
+        run: yarn package
+
+      - name: List packages
+        run: ls -l out/
+
+      # `--clobber` makes a re-run replace assets instead of failing, which is
+      # what is wanted when a release is rebuilt after a failed run.
+      - name: Attach packages to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$TAG" out/*.ipk --clobber --repo "$GITHUB_REPOSITORY"

@@ -12,6 +12,10 @@ categories:
       - 'bugfix'
       - 'fix'
       - 'bug'
+  - title: '📝 Documentation'
+    labels:
+      - 'documentation'
+      - 'docs'
   - title: '🧰 Maintenance'
     labels:
       - 'chore'
