@@ -10,9 +10,13 @@ on:
 
 # `pull_request_target` runs with a writable token, so this workflow must never
 # check out or execute code from the pull request. It only calls the API.
+# Label creation/assignment lives under the Issues API (`issues.createLabel`,
+# `issues.addLabels`, `issues.removeLabel`, `issues.listEvents`), so it needs
+# `issues: write`; `pull-requests: write` alone returns 403 on those calls.
 permissions:
   contents: read
-  pull-requests: write
+  issues: write
+  pull-requests: read
 
 concurrency:
   group: pr-labeler-${{ github.event.pull_request.number }}
@@ -96,13 +100,34 @@ jobs:
             const { owner, repo } = context.repo;
             const pull = context.payload.pull_request;
             const known = Object.keys(CATEGORIES);
+            const existingCategories = (pull.labels || []).map((label) => label.name).filter((name) => known.includes(name));
 
-            // A label set by hand is a deliberate choice; leave it alone.
-            const existing = (pull.labels || []).map((label) => label.name);
-            const alreadyCategorized = existing.some((name) => known.includes(name));
-            if (alreadyCategorized) {
-              core.info(`Pull request already has a category label: ${existing.join(', ')}`);
-              return;
+            // A category label a human applied by hand is a deliberate choice and
+            // must never be silently replaced. A category label this workflow
+            // applied on an earlier run is safe to recompute, since a pushed
+            // commit or an edited title can change which category actually fits
+            // (a documentation-only PR that later gains code, for example).
+            // The two are told apart by who last added the label, via the
+            // issue's `labeled` timeline events.
+            const wasLabeledByThisWorkflow = async (labelName) => {
+              const events = await github.paginate(
+                github.rest.issues.listEvents,
+                { owner, repo, issue_number: pull.number, per_page: 100 },
+                (response) => response.data,
+              );
+              const labelEvents = events.filter((event) => event.event === 'labeled' && event.label?.name === labelName);
+              const last = labelEvents[labelEvents.length - 1];
+
+              return last?.actor?.login === 'github-actions[bot]';
+            };
+
+            if (existingCategories.length) {
+              const appliedByThisWorkflow = await Promise.all(existingCategories.map(wasLabeledByThisWorkflow));
+
+              if (!appliedByThisWorkflow.every(Boolean)) {
+                core.info(`Pull request has a manually-set category label, leaving it alone: ${existingCategories.join(', ')}`);
+                return;
+              }
             }
 
             const fromTitlePrefix = () => {
@@ -144,6 +169,17 @@ jobs:
             if (!category) {
               core.info('No category could be derived from the title, branch or changed files.');
               return;
+            }
+
+            if (existingCategories.includes(category)) {
+              core.info(`Pull request is already labeled ${category}.`);
+              return;
+            }
+
+            // Drop stale category labels this workflow applied earlier before
+            // adding the newly derived one, so a PR only ever carries one.
+            for (const staleCategory of existingCategories) {
+              await github.rest.issues.removeLabel({ owner, repo, issue_number: pull.number, name: staleCategory });
             }
 
             // Adding a label that does not exist yet fails, so create it first.

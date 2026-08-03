@@ -77,9 +77,18 @@ grouped into categories by label according to `.github/release-drafter.yml`.
    "Bump …" → `chore`);
 4. a keyword in the branch name.
 
-A pull request that already carries one of these labels is left alone, so a label
-set by hand is never overwritten. If no rule matches, the pull request is left
-unlabeled and its entry appears in the uncategorized part of the draft release.
+If a category label is already present, the workflow checks who applied it (via
+the issue's `labeled` timeline events) before touching anything:
 
-The workflow uses `pull_request_target` because labeling needs a writable token.
-It never checks out or runs code from the pull request; it only calls the API.
+- a label added by a person is left alone, so a manual choice is never
+  overwritten;
+- a label the workflow applied itself on an earlier run is recomputed, so a
+  pull request that started as documentation-only and later gained code moves
+  from `documentation` to `feature` instead of staying stuck.
+
+If no rule matches, the pull request is left unlabeled and its entry appears in
+the uncategorized part of the draft release.
+
+The workflow uses `pull_request_target` because labeling needs a writable
+`issues: write` token. It never checks out or runs code from the pull request;
+it only calls the API.
