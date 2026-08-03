@@ -3,10 +3,14 @@ import { VideoPlayerBase } from '@enact/moonstone/VideoPlayer';
 import cx from 'classnames';
 import HLS from 'hls.js';
 
+import Button from 'components/button';
 import { RecoveryState } from 'components/media';
 
+import { EncodedCapture, ExportCapture, encodeCapture } from './diagnosticsExport';
+import DiagnosticsQr from './diagnosticsQr';
 import { getVideoNode } from './getVideoNode';
 
+import { APP_VERSION } from 'utils/app';
 import { getLevelQualityHeight } from 'utils/hlsLevels';
 
 const HISTORY_LIMIT = 30;
@@ -122,6 +126,9 @@ type PlaybackSnapshot = {
 
 type Props = {
   visible: boolean;
+  /** Replaces the panels with a scannable QR capture. Independent of `visible`. */
+  exportVisible: boolean;
+  onExportToggle: () => void;
   player: React.MutableRefObject<VideoPlayerBase | undefined>;
 };
 
@@ -566,7 +573,7 @@ function getHlsEventDetails(name: string, data: any, hls: HLS) {
   return undefined;
 }
 
-function PlaybackDiagnosticsOverlay({ visible, player }: Props) {
+function PlaybackDiagnosticsOverlay({ visible, exportVisible, onExportToggle, player }: Props) {
   const [target, setTarget] = useState<DiagnosticsTarget>({ video: null, hls: null, selectedQuality: null });
   const [snapshot, setSnapshot] = useState<Nullable<PlaybackSnapshot>>(null);
   const [history, setHistory] = useState<DiagnosticHistoryItem[]>([]);
@@ -577,6 +584,8 @@ function PlaybackDiagnosticsOverlay({ visible, player }: Props) {
   const [emergencyAbortCount, setEmergencyAbortCount] = useState(0);
   const [failureCounts, setFailureCounts] = useState<FailureCounts>({ network: 0, buffer: 0, media: 0, other: 0 });
   const [lastFailure, setLastFailure] = useState<Nullable<{ category: FailureCategory; timestamp: number }>>(null);
+  const [encoded, setEncoded] = useState<Nullable<EncodedCapture>>(null);
+  const [encodeError, setEncodeError] = useState<Nullable<string>>(null);
   const nextHistoryId = useRef(1);
   const pendingAppendStarts = useRef<Map<string, number>>(new Map());
 
@@ -782,124 +791,238 @@ function PlaybackDiagnosticsOverlay({ visible, player }: Props) {
 
   const lastSuccessfulFragmentAge = lastFragment ? (Date.now() - lastFragment.timestamp) / 1000 : undefined;
 
+  useEffect(() => {
+    if (!exportVisible) {
+      setEncoded(null);
+      setEncodeError(null);
+
+      return;
+    }
+
+    // Snapshot everything once, at the moment the user asks for it. Re-encoding on every state tick
+    // would change the QR while it is being scanned.
+    const capturedAt = Date.now();
+    const video = target.video;
+    const ranges = video ? getBufferedRanges(video) : [];
+    const matchingRange = video ? getMatchingRange(ranges, video.currentTime) : undefined;
+    const quality = video ? getPlaybackQuality(video) : undefined;
+    const hlsState = getHlsSnapshot(target.hls);
+
+    const capture: ExportCapture = {
+      capturedAt,
+      appVersion: APP_VERSION,
+      playback: video
+        ? {
+            currentTime: video.currentTime,
+            duration: video.duration,
+            paused: video.paused,
+            seeking: video.seeking,
+            readyState: video.readyState,
+            networkState: video.networkState,
+            videoErrorCode: video.error?.code,
+          }
+        : undefined,
+      buffer: video
+        ? {
+            ahead: matchingRange ? matchingRange.end - video.currentTime : undefined,
+            positionBuffered: Boolean(matchingRange),
+            ranges,
+          }
+        : undefined,
+      hls: {
+        active: hlsState.active,
+        selectedQuality: target.selectedQuality ?? undefined,
+        levelCount: hlsState.levelCount,
+        mode: hlsState.mode,
+        currentLevel: hlsState.currentLevel,
+        nextLevel: hlsState.nextLevel,
+        loadLevel: hlsState.loadLevel,
+        autoLevelCapping: hlsState.autoLevelCapping,
+        bandwidthEstimate: hlsState.bandwidthEstimate,
+        levels: hlsState.levels,
+      },
+      lastFragment: lastFragment
+        ? {
+            level: lastFragment.level,
+            height: lastFragment.height,
+            bytes: lastFragment.bytes,
+            loadSeconds: lastFragment.loadSeconds,
+            ageSeconds: (capturedAt - lastFragment.timestamp) / 1000,
+          }
+        : undefined,
+      pipeline: {
+        load: formatFragLoadStages(fragLoadStages),
+        append: formatBufferAppendStages(bufferAppendStages),
+        emergencyAborts: emergencyAbortCount,
+      },
+      failures: {
+        ...failureCounts,
+        lastCategory: lastFailure?.category,
+        lastAgeSeconds: lastFailure ? (capturedAt - lastFailure.timestamp) / 1000 : undefined,
+      },
+      decode: quality ? { totalFrames: quality.totalVideoFrames, droppedFrames: quality.droppedVideoFrames } : undefined,
+      recovery: recovery
+        ? { attempts: recovery.attempts, limit: recovery.limit, exhausted: recovery.exhausted, lastReason: recovery.lastReason }
+        : undefined,
+      events: history
+        .slice()
+        .reverse()
+        .map((item) => ({ timestamp: item.timestamp, source: item.source, name: item.name, details: item.details })),
+    };
+
+    let cancelled = false;
+
+    encodeCapture(capture).then(
+      (result) => {
+        if (!cancelled) {
+          setEncoded(result);
+        }
+      },
+      (error) => {
+        // encodeCapture refuses to emit a payload its own decoder would reject, so surface that
+        // rather than showing an empty pane.
+        if (!cancelled) {
+          setEncodeError(error?.message || 'Не удалось закодировать диагностику');
+        }
+      },
+    );
+
+    return () => {
+      cancelled = true;
+    };
+    // Intentionally keyed only on `exportVisible`: the capture is a point-in-time snapshot and must
+    // stay frozen while the QR is on screen.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [exportVisible]);
+
+  if (exportVisible) {
+    const chunks = encoded?.chunks ?? [];
+    const size = Math.min(520, Math.floor(1500 / Math.max(1, chunks.length)));
+
+    return (
+      <div className="pointer-events-none absolute z-101 top-14 left-6 right-6 bottom-6 flex flex-col items-center justify-center rounded bg-black bg-opacity-90 p-4 text-white ring">
+        <div className="mb-3 text-2xl font-bold">Экспорт диагностики</div>
+
+        {!encoded && !encodeError && <div className="text-xl">Готовим данные…</div>}
+        {encodeError && <div className="max-w-3xl text-center text-xl text-yellow-300">{encodeError}</div>}
+
+        {encoded && (
+          <>
+            <div className="flex items-start justify-center gap-6">
+              {chunks.map((chunk, index) => (
+                <div key={chunk.slice(0, 12)} className="flex flex-col items-center">
+                  <DiagnosticsQr value={chunk} size={size} />
+                  {chunks.length > 1 && (
+                    <div className="mt-2 text-lg">
+                      Часть {index + 1} из {chunks.length}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 text-lg text-gray-300">
+              Отсканируйте телефоном и передайте текст целиком. {encoded.encodedLength} симв.
+              {encoded.compressed ? ' (сжато)' : ' (без сжатия)'}
+              {encoded.droppedEvents > 0 ? `, старых событий отброшено: ${encoded.droppedEvents}` : ''}
+            </div>
+          </>
+        )}
+
+        <div className="mt-2 text-lg text-gray-300">Back: закрыть</div>
+      </div>
+    );
+  }
+
   if (!visible) {
     return null;
   }
 
   return (
-    <div className="pointer-events-none absolute z-101 top-14 left-6 right-6 max-h-screen overflow-hidden rounded bg-black bg-opacity-80 p-4 text-white ring">
+    <div className="pointer-events-none absolute z-101 top-14 left-6 right-6 bottom-6 flex flex-col overflow-hidden rounded bg-black bg-opacity-80 p-4 text-white ring">
       <div className="mb-3 flex items-center justify-between">
         <div className="text-2xl font-bold">Диагностика воспроизведения</div>
-        <div className="text-lg text-gray-300">Back: закрыть</div>
+        <div className="flex items-center">
+          <Button className="pointer-events-auto mr-4 bg-gray-800 text-green-400" onClick={onExportToggle}>
+            QR
+          </Button>
+          <div className="text-lg text-gray-300">Back: закрыть</div>
+        </div>
       </div>
 
       {!snapshot && <div className="text-xl">Видео еще не готово</div>}
 
       {snapshot && (
-        <div className="grid grid-cols-3 gap-4 text-base leading-snug">
-          <section>
-            <h3 className="mb-1 text-xl font-bold text-blue-300">Playback</h3>
-            <div>
-              Time: {formatTime(snapshot.currentTime)} / {formatTime(snapshot.duration)}
-            </div>
-            <div>paused: {String(snapshot.paused)}</div>
-            <div>seeking: {String(snapshot.seeking)}</div>
-            <div>
-              readyState: {snapshot.readyState} {snapshot.readyStateLabel}
-            </div>
-            <div>
-              networkState: {snapshot.networkState} {snapshot.networkStateLabel}
-            </div>
-            <div>video error: {String(snapshot.videoError)}</div>
-            {snapshot.videoError && (
+        <div className="grid min-h-0 flex-1 grid-cols-3 gap-4 text-base leading-tight">
+          {/* Column 1: native playback, buffer, and the local media pipeline. */}
+          <div className="flex min-h-0 flex-col gap-3 overflow-hidden">
+            <section>
+              <h3 className="mb-1 text-xl font-bold text-blue-300">Playback</h3>
               <div>
-                error: {snapshot.videoErrorCode || 'n/a'} {snapshot.videoErrorMessage}
+                Time: {formatTime(snapshot.currentTime)} / {formatTime(snapshot.duration)}
               </div>
-            )}
-          </section>
+              <div>paused: {String(snapshot.paused)}</div>
+              <div>seeking: {String(snapshot.seeking)}</div>
+              <div>
+                readyState: {snapshot.readyState} {snapshot.readyStateLabel}
+              </div>
+              <div>
+                networkState: {snapshot.networkState} {snapshot.networkStateLabel}
+              </div>
+              <div>video error: {String(snapshot.videoError)}</div>
+              {snapshot.videoError && (
+                <div>
+                  error: {snapshot.videoErrorCode || 'n/a'} {snapshot.videoErrorMessage}
+                </div>
+              )}
+            </section>
 
-          <section>
-            <h3 className="mb-1 text-xl font-bold text-blue-300">Buffer</h3>
-            <div>ahead: {formatSeconds(snapshot.bufferAhead)}</div>
-            <div>current range: {formatRange(snapshot.matchingRange)}</div>
-            <div className={cx({ 'text-yellow-300': !snapshot.matchingRange })}>
-              position buffered: {snapshot.matchingRange ? 'yes' : 'no'}
-            </div>
-            <div>ranges: {formatRanges(snapshot.ranges)}</div>
-          </section>
+            <section>
+              <h3 className="mb-1 text-xl font-bold text-blue-300">Buffer</h3>
+              <div>ahead: {formatSeconds(snapshot.bufferAhead)}</div>
+              <div>current range: {formatRange(snapshot.matchingRange)}</div>
+              <div className={cx({ 'text-yellow-300': !snapshot.matchingRange })}>
+                position buffered: {snapshot.matchingRange ? 'yes' : 'no'}
+              </div>
+              <div>ranges: {formatRanges(snapshot.ranges)}</div>
+            </section>
 
-          <section>
-            <h3 className="mb-1 text-xl font-bold text-blue-300">HLS</h3>
-            <div>active: {String(snapshot.hls.active)}</div>
-            <div>selected quality: {target.selectedQuality ?? 'n/a'}</div>
-            <div>levels: {snapshot.hls.levelCount}</div>
-            <div>mode: {snapshot.hls.mode}</div>
-            <div>currentLevel: {snapshot.hls.currentLevel ?? 'n/a'}</div>
-            <div>nextLevel: {snapshot.hls.nextLevel ?? 'n/a'}</div>
-            <div>loadLevel: {snapshot.hls.loadLevel ?? 'n/a'}</div>
-            <div>autoLevelCapping: {snapshot.hls.autoLevelCapping ?? 'n/a'}</div>
-            <div>bandwidthEstimate: {formatBitrate(snapshot.hls.bandwidthEstimate)}</div>
-            <div>available: {snapshot.hls.levels.join(', ') || 'n/a'}</div>
-          </section>
+            <section>
+              <h3 className="mb-1 text-xl font-bold text-blue-300">Segment Pipeline</h3>
+              <div
+                className={cx({
+                  'text-yellow-300': Object.values(fragLoadStages).some((stage) => stage.status === 'loading'),
+                })}
+              >
+                load: {formatFragLoadStages(fragLoadStages)}
+              </div>
+              <div
+                className={cx({
+                  'text-yellow-300': Object.values(bufferAppendStages).some((stage) => stage.status === 'appending'),
+                })}
+              >
+                append: {formatBufferAppendStages(bufferAppendStages)}
+              </div>
+              <div>emergency aborts: {emergencyAbortCount}</div>
+            </section>
 
-          <section>
-            <h3 className="mb-1 text-xl font-bold text-blue-300">Last Fragment</h3>
-            <div>{formatLastFragment(lastFragment)}</div>
-            <div>last successful: {formatSeconds(lastSuccessfulFragmentAge)} ago</div>
-          </section>
+            <section>
+              <h3 className="mb-1 text-xl font-bold text-blue-300">Decode Quality</h3>
+              {snapshot.playbackQuality ? (
+                <>
+                  <div>frames: {snapshot.playbackQuality.totalVideoFrames}</div>
+                  <div>dropped: {snapshot.playbackQuality.droppedVideoFrames}</div>
+                  <div>dropped %: {snapshot.playbackQuality.droppedPercent.toFixed(2)}%</div>
+                </>
+              ) : (
+                <div>not available</div>
+              )}
+            </section>
+          </div>
 
-          <section>
-            <h3 className="mb-1 text-xl font-bold text-blue-300">Segment Pipeline</h3>
-            <div
-              className={cx({
-                'text-yellow-300': Object.values(fragLoadStages).some((stage) => stage.status === 'loading'),
-              })}
-            >
-              load: {formatFragLoadStages(fragLoadStages)}
-            </div>
-            <div
-              className={cx({
-                'text-yellow-300': Object.values(bufferAppendStages).some((stage) => stage.status === 'appending'),
-              })}
-            >
-              append: {formatBufferAppendStages(bufferAppendStages)}
-            </div>
-            <div>emergency aborts: {emergencyAbortCount}</div>
-          </section>
-
-          <section>
-            <h3 className="mb-1 text-xl font-bold text-blue-300">Failure Summary</h3>
-            <div>network: {failureCounts.network}</div>
-            <div>buffer starvation: {failureCounts.buffer}</div>
-            <div>media/decode: {failureCounts.media}</div>
-            <div>other: {failureCounts.other}</div>
-            <div className={cx({ 'text-yellow-300': Boolean(lastFailure) })}>
-              last:{' '}
-              {lastFailure
-                ? `${formatCategoryLabel(lastFailure.category)}, ${formatSeconds((Date.now() - lastFailure.timestamp) / 1000)} ago`
-                : 'none'}
-            </div>
-            <div className={cx({ 'text-red-400': recovery?.exhausted, 'text-yellow-300': !recovery?.exhausted && recovery?.attempts })}>
-              recovery: {formatRecovery(recovery)}
-            </div>
-          </section>
-
-          <section>
-            <h3 className="mb-1 text-xl font-bold text-blue-300">Decode Quality</h3>
-            {snapshot.playbackQuality ? (
-              <>
-                <div>frames: {snapshot.playbackQuality.totalVideoFrames}</div>
-                <div>dropped: {snapshot.playbackQuality.droppedVideoFrames}</div>
-                <div>dropped %: {snapshot.playbackQuality.droppedPercent.toFixed(2)}%</div>
-              </>
-            ) : (
-              <div>not available</div>
-            )}
-          </section>
-
-          <section>
+          {/* Column 2: the event history alone, so it gets the full column height. */}
+          <section className="flex min-h-0 flex-col overflow-hidden">
             <h3 className="mb-1 text-xl font-bold text-blue-300">Recent Events</h3>
-            <div className="max-h-58 overflow-hidden">
+            <div className="min-h-0 flex-1 overflow-hidden">
               {history
                 .slice()
                 .reverse()
@@ -912,6 +1035,46 @@ function PlaybackDiagnosticsOverlay({ visible, player }: Props) {
               {!history.length && <div>none</div>}
             </div>
           </section>
+
+          {/* Column 3: HLS level state, the fragment it produced, and failure totals. */}
+          <div className="flex min-h-0 flex-col gap-3 overflow-hidden">
+            <section>
+              <h3 className="mb-1 text-xl font-bold text-blue-300">HLS</h3>
+              <div>active: {String(snapshot.hls.active)}</div>
+              <div>selected quality: {target.selectedQuality ?? 'n/a'}</div>
+              <div>levels: {snapshot.hls.levelCount}</div>
+              <div>mode: {snapshot.hls.mode}</div>
+              <div>currentLevel: {snapshot.hls.currentLevel ?? 'n/a'}</div>
+              <div>nextLevel: {snapshot.hls.nextLevel ?? 'n/a'}</div>
+              <div>loadLevel: {snapshot.hls.loadLevel ?? 'n/a'}</div>
+              <div>autoLevelCapping: {snapshot.hls.autoLevelCapping ?? 'n/a'}</div>
+              <div>bandwidthEstimate: {formatBitrate(snapshot.hls.bandwidthEstimate)}</div>
+              <div>available: {snapshot.hls.levels.join(', ') || 'n/a'}</div>
+            </section>
+
+            <section>
+              <h3 className="mb-1 text-xl font-bold text-blue-300">Last Fragment</h3>
+              <div>{formatLastFragment(lastFragment)}</div>
+              <div>last successful: {formatSeconds(lastSuccessfulFragmentAge)} ago</div>
+            </section>
+
+            <section>
+              <h3 className="mb-1 text-xl font-bold text-blue-300">Failure Summary</h3>
+              <div>network: {failureCounts.network}</div>
+              <div>buffer starvation: {failureCounts.buffer}</div>
+              <div>media/decode: {failureCounts.media}</div>
+              <div>other: {failureCounts.other}</div>
+              <div className={cx({ 'text-yellow-300': Boolean(lastFailure) })}>
+                last:{' '}
+                {lastFailure
+                  ? `${formatCategoryLabel(lastFailure.category)}, ${formatSeconds((Date.now() - lastFailure.timestamp) / 1000)} ago`
+                  : 'none'}
+              </div>
+              <div className={cx({ 'text-red-400': recovery?.exhausted, 'text-yellow-300': !recovery?.exhausted && recovery?.attempts })}>
+                recovery: {formatRecovery(recovery)}
+              </div>
+            </section>
+          </div>
         </div>
       )}
     </div>

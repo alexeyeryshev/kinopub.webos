@@ -46,6 +46,7 @@
     "lodash": "4.17.21",
     "millify": "4.0.0",
     "object-to-formdata": "4.1.0",
+    "qrcode-generator": "2.0.4",
     "react": "17.0.2",
     "react-dom": "17.0.2",
     "react-helmet": "6.1.0",

@@ -14,10 +14,15 @@ Do not change:
 - ABR behavior;
 - source selection;
 - retry strategy;
-- network logic;
-- runtime dependencies.
+- network logic.
 
 The implementation must remain compatible with the current React, TypeScript, Enact/webOS runtime, and pinned `hls.js` version.
+
+Runtime dependencies were originally frozen outright. That rule is now narrowed: the pinned React,
+Enact/webOS, TypeScript, and `hls.js` versions still must not move, but a small, self-contained
+dependency may be added when it is the only thing standing between the diagnostics and a usable
+workflow. The single approved addition so far is `qrcode-generator`, used by the capture export
+below; it pulls in no transitive dependencies and touches nothing on the playback path.
 
 ## Entry Point
 
@@ -47,6 +52,23 @@ The overlay should:
 - close with existing Back/player-menu behavior;
 - keep event history only in memory for the current playback session;
 - avoid console logging in normal use.
+
+## Overlay Layout
+
+The panels are laid out in three fixed columns, grouped by what a reader is trying to answer rather
+than by source:
+
+- column 1 — what the local pipeline is doing: `Playback`, `Buffer`, `Segment Pipeline`,
+  `Decode Quality`;
+- column 2 — `Recent Events`, alone;
+- column 3 — what HLS chose and what came of it: `HLS`, `Last Fragment`, `Failure Summary`
+  (including the recovery budget).
+
+`Recent Events` gets a column to itself because it is the only unbounded section: sharing a column
+capped it to a handful of visible entries, which hid exactly the run-up to a stall that the history
+exists to show. The overlay is anchored to both the top and bottom edges and the columns are laid
+out with flex, so the event list fills the available height and clips against the panel instead of
+an arbitrary `max-height`.
 
 ## Privacy Requirements
 
@@ -218,3 +240,82 @@ Clean up all:
 - intervals/timers.
 
 Diagnostic state must be isolated, bounded, and discarded when playback unmounts.
+
+## Capture Export
+
+The overlay can serialize its current state into a QR code so a report can leave the TV without a
+network round trip. That constraint drives the whole
+design: the failure under investigation is a network stall, so any transport that uploads from the
+app is unavailable exactly when the capture matters. Scanning with a phone works regardless.
+
+Sending to the Sentry DSN already present in `src/utils/logging.ts` is not an option either — it
+belongs to the upstream project, so the data would go to a third party and stay invisible to whoever
+is debugging this fork.
+
+### Entry point
+
+A `QR` button sits in the diagnostics panel header, next to the `Back: закрыть` hint — the capture
+belongs to the diagnostics screen rather than the settings menu, since that is where the state being
+captured is on display.
+
+The overlay stays `pointer-events-none` so it never intercepts player input; only the button opts
+back in via `pointer-events-auto`, which keeps it clickable with the Magic Remote pointer. Remotes
+without a pointer reach the same action with the `Yellow` colour key, which is only bound while the
+diagnostics panels are visible.
+
+The capture is taken once, when the view opens, and does not refresh while it is on screen: a QR
+that changed mid-scan would be unscannable.
+
+### Pipeline
+
+```text
+compact text -> deflate-raw (when CompressionStream exists) -> Base32 -> QR (alphanumeric mode)
+```
+
+- **Compact text** (`buildCompactText`): line-oriented, `|`-separated, one leading tag letter per
+  line. Event names travel as indices into a shared `EVENT_CODES` table, and event timestamps as
+  millisecond deltas counting _backwards_ from the capture time. Events are ordered newest-first so
+  that truncation drops the oldest ones.
+- **deflate-raw** via `CompressionStream`. Absent on older runtimes, in which case the payload is
+  emitted uncompressed and the header records that; the decoder handles both.
+- **Base32** (`A-Z2-7`), not Base64. The Base32 alphabet is a subset of the QR alphanumeric charset,
+  so the code encodes at 5.5 bits per character instead of the 8 bits per character that Base64
+  would force through byte mode — a materially smaller code for the same data.
+
+A representative capture (30 events, full snapshot) is ~1270 characters of compact text, ~570
+characters after deflate and Base32, and fits one 77x77-module QR at error-correction level M.
+
+### Chunk header
+
+Each QR carries `KPD<version><D|P><index><count>.<base32>`, for example `KPD1D11.MFRGG…`. `D` marks
+a deflated body and `P` a plain one. Index and count are single digits, so a capture is limited to
+`MAX_CHUNKS` (9) codes; beyond that the encoder halves the event history and retries, reporting how
+many events it dropped. If even a zero-event capture would not fit, it throws instead of emitting
+two-digit indices, and the export view shows the error: a payload the reference decoder rejects by
+design is worse than an honest failure.
+
+The decoder validates that every scanned chunk agrees on version, compression mode, and total count
+before joining any bodies. Chunks are scanned one at a time and can easily come from two different
+captures, and concatenating mismatched halves would yield a plausible-looking but corrupt report.
+
+### Decoder
+
+`scripts/decode-diagnostics.js` is the reference decoder and the contract for the format:
+
+```sh
+node scripts/decode-diagnostics.js "KPD1D11.MFRGG…"     # human-readable report
+node scripts/decode-diagnostics.js --json "KPD1D11.…"   # structured output
+```
+
+Chunks may be passed in any order; a missing one is reported rather than silently dropped. Any
+change to `FORMAT_VERSION` or `EVENT_CODES` in `src/components/player/diagnosticsExport.ts` must land
+in this script in the same commit.
+
+### Privacy
+
+The export carries exactly what the overlay already displays, so the same rules apply without
+exception: hostnames only, never full URLs, query parameters, cookies, or tokens.
+
+That equivalence is the rule to hold to when the overlay grows: a panel added to the screen without a
+matching field in the capture makes the export quietly less useful than the screen it came from. The
+recovery state is carried on the `r|` line for this reason.

@@ -61,6 +61,7 @@ const Player: React.FC<PlayerProps> = ({
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isEpisodesOpen, setIsEpisodesOpen] = useState(false);
   const [isDiagnosticsVisible, setIsDiagnosticsVisible] = useState(false);
+  const [isDiagnosticsExportVisible, setIsDiagnosticsExportVisible] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(true);
   const [isPauseByOKClickActive] = useStorageState<boolean>('is_pause_by_ok_click_active');
   const [subtitleOpacity] = useStorageState<number>('subtitle_opacity', 1);
@@ -158,13 +159,33 @@ const Player: React.FC<PlayerProps> = ({
   const handleDiagnosticsToggle = useCallback(() => {
     setIsDiagnosticsVisible((visible) => !visible);
   }, []);
-  const handleDiagnosticsClose = useCallback(() => {
-    if (isDiagnosticsVisible && !isSettingsOpen && !isEpisodesOpen) {
-      setIsDiagnosticsVisible(false);
+  const handleDiagnosticsExportToggle = useCallback(() => {
+    setIsDiagnosticsExportVisible((visible) => !visible);
+  }, []);
+  const handleDiagnosticsExportButton = useCallback(() => {
+    // Only meaningful while the diagnostics panels are up; otherwise leave the key to anything else.
+    if (isDiagnosticsVisible) {
+      setIsDiagnosticsExportVisible((visible) => !visible);
 
       return false;
     }
-  }, [isDiagnosticsVisible, isSettingsOpen, isEpisodesOpen]);
+  }, [isDiagnosticsVisible]);
+  const handleDiagnosticsClose = useCallback(() => {
+    if (!isSettingsOpen && !isEpisodesOpen) {
+      // The export view sits on top of the panels, so Back peels it off first.
+      if (isDiagnosticsExportVisible) {
+        setIsDiagnosticsExportVisible(false);
+
+        return false;
+      }
+
+      if (isDiagnosticsVisible) {
+        setIsDiagnosticsVisible(false);
+
+        return false;
+      }
+    }
+  }, [isDiagnosticsVisible, isDiagnosticsExportVisible, isSettingsOpen, isEpisodesOpen]);
 
   useEffect(() => {
     const styleId = 'subtitle-opacity-style';
@@ -198,6 +219,7 @@ const Player: React.FC<PlayerProps> = ({
   useButtonEffect('Enter', handlePlayPause);
   useButtonEffect('ArrowUp', handleSettingsOpen);
   useButtonEffect('Back', handleDiagnosticsClose);
+  useButtonEffect('Yellow', handleDiagnosticsExportButton);
 
   return (
     <>
@@ -208,7 +230,12 @@ const Player: React.FC<PlayerProps> = ({
         onDiagnosticsToggle={handleDiagnosticsToggle}
         player={playerRef}
       />
-      <PlaybackDiagnosticsOverlay visible={isDiagnosticsVisible} player={playerRef} />
+      <PlaybackDiagnosticsOverlay
+        visible={isDiagnosticsVisible}
+        exportVisible={isDiagnosticsExportVisible}
+        onExportToggle={handleDiagnosticsExportToggle}
+        player={playerRef}
+      />
       {controlsVisible && (
         <div className="absolute z-10 top-0 px-4 pt-2 flex items-center">
           <BackButton className="mr-2" />

@@ -84,8 +84,43 @@ Use this checklist on an LG webOS TV after installing a build that includes the 
 - If supported, confirm total frames, dropped frames, and dropped percentage update.
 - If unsupported on the TV firmware, confirm the overlay shows `not available`.
 
+## Overlay Layout
+
+- Open the overlay during normal playback.
+- Confirm the left column shows `Playback`, `Buffer`, `Segment Pipeline`, `Decode Quality`.
+- Confirm the middle column shows only `Recent Events`, and that it runs from the top of the column
+  down to the bottom of the panel rather than stopping after a few entries.
+- Confirm the right column shows `HLS`, `Last Fragment`, `Failure Summary`.
+- Confirm a `QR` button is visible in the panel header, left of the `Back: закрыть` hint.
+- Let several events accumulate and confirm noticeably more of them are visible than before.
+
+## Capture Export
+
+- With the diagnostics panels open, activate the `QR` button in the header (Magic Remote pointer),
+  and separately confirm the `Yellow` colour key does the same thing.
+- Confirm `Yellow` does nothing when the diagnostics panels are closed.
+- Confirm a QR code appears with the caption showing the payload length and `(сжато)`. If it says
+  `(без сжатия)`, the TV runtime has no `CompressionStream`; note that, since it roughly doubles the
+  code size.
+- Confirm a single code is shown for a normal capture; `Часть N из M` labels only appear if the
+  payload needed splitting.
+- Scan it with a phone camera and confirm it decodes to a text string starting with `KPD1`.
+- Run the decoder and confirm the report matches what the overlay showed:
+
+  ```sh
+  node scripts/decode-diagnostics.js "<scanned text>"
+  ```
+
+- Confirm the decoded event list is newest-first and its timestamps line up with the overlay.
+- Press Back and confirm the export view closes back to the diagnostics panels, and that a second
+  Back then closes the panels themselves. Playback must be unaffected throughout.
+- Open the export again and confirm the QR does not change or flicker while it is on screen (the
+  capture is frozen at the moment it was opened).
+
 ## Privacy Check
 
 - Inspect the overlay during HLS errors.
 - Confirm no full stream URLs, authorization tokens, cookies, or query parameters are visible.
 - Confirm only hostnames are shown for request diagnostics.
+- Decode an exported capture taken during an error and confirm the same holds in the decoded text —
+  the export must never carry more than the overlay displays.
