@@ -48,6 +48,21 @@ const RECOVERY_MAX_MEDIA_ATTEMPTS = 2;
 const RECOVERY_BASE_DELAY = 1000;
 const RECOVERY_MAX_DELAY = 8000;
 
+// Not every stall announces itself as a fatal error. A CDN edge can refuse
+// specific segments indefinitely (HTTP 0 on every attempt) while hls.js keeps
+// retrying the same URLs non-fatally, so nothing above ever escalates and
+// playback sits frozen at the end of the buffer. Retrying the same request is
+// useless there; the playlist has to be fetched again to get fresh segment
+// URLs, which is usually a different edge.
+const STALL_CHECK_INTERVAL = 2000;
+const STALL_MIN_BUFFER_AHEAD = 0.5;
+const STALL_RESTART_AFTER = 8000;
+const STALL_RELOAD_AFTER = 20000;
+const STALL_MAX_RELOADS = 3;
+// Each stall cycle spends one restart and one reload, so this is the cap the
+// overlay renders progress against.
+const STALL_MAX_ACTIONS = STALL_MAX_RELOADS * 2;
+
 export type RecoveryState = {
   attempts: number;
   // The cap that applies to `attempts`, which differs between network and
@@ -120,7 +135,31 @@ function useVideoPlayer({
   // Mirrors qualityMode synchronously so a pending Auto request survives a
   // replacement manifest that is still loading (see setSourceTrack below).
   const qualityModeRef = useRef(qualityMode);
-  const recoveryRef = useRef<RecoveryState>({ attempts: 0, limit: RECOVERY_MAX_NETWORK_ATTEMPTS, exhausted: false });
+  // Fatal-error recovery and the stall watchdog keep separate budgets. They
+  // recover from different failures and clear on different evidence -- a fatal
+  // retry is only proven good once the failing stream buffers, while the
+  // watchdog only needs playback to move again -- so sharing one record let
+  // each reset and inflate the other's attempt count.
+  const fatalRecoveryRef = useRef<RecoveryState>({ attempts: 0, limit: RECOVERY_MAX_NETWORK_ATTEMPTS, exhausted: false });
+  const stallRecoveryRef = useRef<RecoveryState>({ attempts: 0, limit: STALL_MAX_ACTIONS, exhausted: false });
+  // True only while a fatal-error retry is scheduled, so the watchdog can stand
+  // aside without reading state it writes itself.
+  const fatalRetryPendingRef = useRef(false);
+  const currentAudioTrackIndexRef = useRef(0);
+
+  // The overlay shows one line, so surface whichever path acted most recently.
+  const getRecovery = useCallback(() => {
+    const fatal = fatalRecoveryRef.current;
+    const stall = stallRecoveryRef.current;
+    const fatalActive = fatal.attempts > 0 || fatal.exhausted;
+    const stallActive = stall.attempts > 0 || stall.exhausted;
+
+    if (fatalActive && stallActive) {
+      return (fatal.lastAt || 0) >= (stall.lastAt || 0) ? fatal : stall;
+    }
+
+    return stallActive ? stall : fatal;
+  }, []);
   const [currentAudioTrack, setCurrentAudioTrack] = useState<AudioTrack>(
     () => (audioTracks?.find((audioTrack) => audioTrack.default) || audioTracks?.[0])!,
   );
@@ -218,6 +257,7 @@ function useVideoPlayer({
     () => audioTracks?.findIndex((audioTrack) => audioTrack.name === currentAudioTrack.name) ?? 0,
     [audioTracks, currentAudioTrack],
   );
+  currentAudioTrackIndexRef.current = currentAudioTrackIndex;
   const currentSrc = useMemo(
     () =>
       streamingType === 'hls'
@@ -258,7 +298,9 @@ function useVideoPlayer({
       setIsAdaptiveLevel(false);
       qualityModeRef.current = 'fixed';
       setQualityMode('fixed');
-      recoveryRef.current = { attempts: 0, limit: RECOVERY_MAX_NETWORK_ATTEMPTS, exhausted: false };
+      fatalRecoveryRef.current = { attempts: 0, limit: RECOVERY_MAX_NETWORK_ATTEMPTS, exhausted: false };
+      stallRecoveryRef.current = { attempts: 0, limit: STALL_MAX_ACTIONS, exhausted: false };
+      fatalRetryPendingRef.current = false;
 
       if (isHLSJSActive !== false && currentSrc.includes('.m3u8') && HLS.isSupported()) {
         const hls = (hlsRef.current = new HLS({
@@ -285,8 +327,8 @@ function useVideoPlayer({
           recoveringStream = undefined;
           mediaRecoveryAttempts = 0;
 
-          if (recoveryRef.current.attempts > 0 || recoveryRef.current.exhausted) {
-            recoveryRef.current = { ...recoveryRef.current, attempts: 0, exhausted: false };
+          if (fatalRecoveryRef.current.attempts > 0 || fatalRecoveryRef.current.exhausted) {
+            fatalRecoveryRef.current = { ...fatalRecoveryRef.current, attempts: 0, exhausted: false };
           }
         });
 
@@ -302,10 +344,10 @@ function useVideoPlayer({
           recoveringStream = data?.frag?.type || undefined;
 
           if (data.type === HLS.ErrorTypes.NETWORK_ERROR) {
-            const attempts = recoveryRef.current.attempts + 1;
+            const attempts = fatalRecoveryRef.current.attempts + 1;
 
             if (attempts > RECOVERY_MAX_NETWORK_ATTEMPTS) {
-              recoveryRef.current = {
+              fatalRecoveryRef.current = {
                 attempts: attempts - 1,
                 limit: RECOVERY_MAX_NETWORK_ATTEMPTS,
                 exhausted: true,
@@ -315,7 +357,7 @@ function useVideoPlayer({
               return;
             }
 
-            recoveryRef.current = {
+            fatalRecoveryRef.current = {
               attempts,
               limit: RECOVERY_MAX_NETWORK_ATTEMPTS,
               exhausted: false,
@@ -325,7 +367,9 @@ function useVideoPlayer({
 
             // Back off so a CDN that is refusing every request is not hammered.
             const delay = Math.min(RECOVERY_BASE_DELAY * 2 ** (attempts - 1), RECOVERY_MAX_DELAY);
+            fatalRetryPendingRef.current = true;
             recoveryTimeoutId = setTimeout(() => {
+              fatalRetryPendingRef.current = false;
               if (hlsRef.current === hls) {
                 hls.startLoad();
               }
@@ -338,7 +382,7 @@ function useVideoPlayer({
             mediaRecoveryAttempts += 1;
 
             if (mediaRecoveryAttempts > RECOVERY_MAX_MEDIA_ATTEMPTS) {
-              recoveryRef.current = {
+              fatalRecoveryRef.current = {
                 attempts: RECOVERY_MAX_MEDIA_ATTEMPTS,
                 limit: RECOVERY_MAX_MEDIA_ATTEMPTS,
                 exhausted: true,
@@ -350,7 +394,7 @@ function useVideoPlayer({
 
             // Mirrored into the exposed state so the overlay reports decoder
             // recovery too, rather than sitting at `idle` through it.
-            recoveryRef.current = {
+            fatalRecoveryRef.current = {
               attempts: mediaRecoveryAttempts,
               limit: RECOVERY_MAX_MEDIA_ATTEMPTS,
               exhausted: false,
@@ -370,11 +414,20 @@ function useVideoPlayer({
 
           // Key-system, mux and other fatal errors have no documented in-place
           // recovery path, so record them instead of retrying blindly.
-          recoveryRef.current = { ...recoveryRef.current, exhausted: true, lastReason: reason, lastAt: Date.now() };
+          fatalRecoveryRef.current = { ...fatalRecoveryRef.current, exhausted: true, lastReason: reason, lastAt: Date.now() };
         });
         hls.on(HLS.Events.MANIFEST_PARSED, () => {
           const isAdaptive = hls.levels.length > 1;
           setIsAdaptiveLevel(isAdaptive);
+
+          // The watchdog's full reload rebuilds the manifest's audio-track
+          // state, and the effect that applies the user's choice is keyed by
+          // values that do not change here, so restore it alongside quality --
+          // otherwise recovery silently reverts to the default audio track.
+          const hlsAudioTrack = hls.audioTracks?.[currentAudioTrackIndexRef.current];
+          if (hlsAudioTrack) {
+            hls.audioTrack = hlsAudioTrack.id;
+          }
 
           if (isAdaptive && qualityModeRef.current === 'auto') {
             hls.currentLevel = -1;
@@ -408,6 +461,7 @@ function useVideoPlayer({
       if (recoveryTimeoutId) {
         clearTimeout(recoveryTimeoutId);
       }
+      fatalRetryPendingRef.current = false;
       if (videoRef.current) {
         if (videoRef.current.currentTime > 0) {
           // eslint-disable-next-line
@@ -422,6 +476,133 @@ function useVideoPlayer({
       }
     };
   }, [currentSrc, isHLSJSActive, handleMediaLoaded]);
+
+  // Stall watchdog. Covers the failures that never surface as a fatal error:
+  // playback sits at the end of the buffer while hls.js retries segments that
+  // the assigned CDN edge will never serve. Escalates from a cheap reload of
+  // the loading state to a full playlist refetch, which is what actually
+  // produces new segment URLs.
+  useEffect(() => {
+    if (!currentSrc) {
+      return;
+    }
+
+    let stalledSince: number | undefined;
+    let restarted = false;
+    let reloads = 0;
+    // Every recovery action taken for the current stall, restarts included, so
+    // the overlay never reads `idle` while the watchdog is working.
+    let actions = 0;
+    let lastPosition = -1;
+
+    const getBufferAhead = (video: HTMLVideoElement) => {
+      for (let index = 0; index < video.buffered.length; index += 1) {
+        try {
+          if (video.buffered.start(index) <= video.currentTime && video.currentTime <= video.buffered.end(index)) {
+            return video.buffered.end(index) - video.currentTime;
+          }
+        } catch (e) {
+          return 0;
+        }
+      }
+
+      return 0;
+    };
+
+    const intervalId = setInterval(() => {
+      const video = videoRef.current;
+      const hls = hlsRef.current;
+
+      if (!video || !hls) {
+        return;
+      }
+
+      // While a fatal-error retry is scheduled, that path owns recovery.
+      if (fatalRetryPendingRef.current) {
+        return;
+      }
+
+      const position = video.currentTime;
+      const advancing = position !== lastPosition;
+      lastPosition = position;
+
+      if (video.paused || video.ended || advancing || getBufferAhead(video) > STALL_MIN_BUFFER_AHEAD) {
+        stalledSince = undefined;
+        restarted = false;
+
+        // Playback moving again is what this budget is spent against, so the
+        // reload allowance is restored too -- a later, unrelated stall gets a
+        // full budget rather than inheriting an already-survived one.
+        actions = 0;
+        reloads = 0;
+
+        if (stallRecoveryRef.current.exhausted || stallRecoveryRef.current.attempts > 0) {
+          stallRecoveryRef.current = { attempts: 0, limit: STALL_MAX_ACTIONS, exhausted: false };
+        }
+
+        return;
+      }
+
+      const now = Date.now();
+
+      if (!stalledSince) {
+        stalledSince = now;
+        return;
+      }
+
+      const stalledFor = now - stalledSince;
+
+      // First, just ask hls.js to re-plan from where playback actually is.
+      if (!restarted && stalledFor >= STALL_RESTART_AFTER) {
+        restarted = true;
+        actions += 1;
+        stallRecoveryRef.current = {
+          attempts: actions,
+          limit: STALL_MAX_ACTIONS,
+          exhausted: false,
+          lastReason: 'stall / restart',
+          lastAt: now,
+        };
+        hls.startLoad(position);
+        return;
+      }
+
+      if (!restarted || stalledFor < STALL_RELOAD_AFTER) {
+        return;
+      }
+
+      if (reloads >= STALL_MAX_RELOADS) {
+        stallRecoveryRef.current = {
+          attempts: actions,
+          limit: STALL_MAX_ACTIONS,
+          exhausted: true,
+          lastReason: 'stall / reload',
+          lastAt: now,
+        };
+        return;
+      }
+
+      // Refetch the playlist so the segment URLs -- and usually the edge
+      // serving them -- are replaced, then resume from the same position.
+      reloads += 1;
+      actions += 1;
+      stalledSince = now;
+      restarted = false;
+      stallRecoveryRef.current = {
+        attempts: actions,
+        limit: STALL_MAX_ACTIONS,
+        exhausted: false,
+        lastReason: 'stall / reload',
+        lastAt: now,
+      };
+      hls.loadSource(currentSrc);
+      hls.startLoad(position);
+    }, STALL_CHECK_INTERVAL);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [currentSrc]);
 
   useEffect(() => {
     if (isLoaded) {
@@ -490,7 +671,7 @@ function useVideoPlayer({
     () => ({
       videoRef,
       hlsRef,
-      recoveryRef,
+      getRecovery,
       getAudioTracks,
       getAudioTrack,
       setAudioTrack,
@@ -504,7 +685,7 @@ function useVideoPlayer({
     [
       videoRef,
       hlsRef,
-      recoveryRef,
+      getRecovery,
       getAudioTracks,
       getAudioTrack,
       setAudioTrack,
@@ -618,7 +799,7 @@ function useVideoPlayerApi(ref: React.ForwardedRef<MediaRef>, props: OwnProps) {
         return player.hlsRef.current;
       },
       get recovery() {
-        return player.recoveryRef.current;
+        return player.getRecovery();
       },
       get currentTime() {
         return getCurrentTime();
