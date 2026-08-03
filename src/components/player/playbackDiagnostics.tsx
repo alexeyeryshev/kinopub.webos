@@ -3,6 +3,8 @@ import { VideoPlayerBase } from '@enact/moonstone/VideoPlayer';
 import cx from 'classnames';
 import HLS from 'hls.js';
 
+import Button from 'components/button';
+
 import { EncodedCapture, ExportCapture, encodeCapture } from './diagnosticsExport';
 import DiagnosticsQr from './diagnosticsQr';
 import { getVideoNode } from './getVideoNode';
@@ -124,6 +126,7 @@ type Props = {
   visible: boolean;
   /** Replaces the panels with a scannable QR capture. Independent of `visible`. */
   exportVisible: boolean;
+  onExportToggle: () => void;
   player: React.MutableRefObject<VideoPlayerBase | undefined>;
 };
 
@@ -547,7 +550,7 @@ function getHlsEventDetails(name: string, data: any, hls: HLS) {
   return undefined;
 }
 
-function PlaybackDiagnosticsOverlay({ visible, exportVisible, player }: Props) {
+function PlaybackDiagnosticsOverlay({ visible, exportVisible, onExportToggle, player }: Props) {
   const [target, setTarget] = useState<DiagnosticsTarget>({ video: null, hls: null, selectedQuality: null });
   const [snapshot, setSnapshot] = useState<Nullable<PlaybackSnapshot>>(null);
   const [history, setHistory] = useState<DiagnosticHistoryItem[]>([]);
@@ -896,15 +899,20 @@ function PlaybackDiagnosticsOverlay({ visible, exportVisible, player }: Props) {
     <div className="pointer-events-none absolute z-101 top-14 left-6 right-6 bottom-6 flex flex-col overflow-hidden rounded bg-black bg-opacity-80 p-4 text-white ring">
       <div className="mb-3 flex items-center justify-between">
         <div className="text-2xl font-bold">Диагностика воспроизведения</div>
-        <div className="text-lg text-gray-300">Back: закрыть</div>
+        <div className="flex items-center">
+          <Button className="pointer-events-auto mr-4 bg-gray-800 text-green-400" onClick={onExportToggle}>
+            QR
+          </Button>
+          <div className="text-lg text-gray-300">Back: закрыть</div>
+        </div>
       </div>
 
       {!snapshot && <div className="text-xl">Видео еще не готово</div>}
 
       {snapshot && (
-        <div className="grid min-h-0 flex-1 grid-cols-3 gap-4 text-base leading-snug">
+        <div className="grid min-h-0 flex-1 grid-cols-3 gap-4 text-base leading-tight">
           {/* Column 1: native playback, buffer, and the local media pipeline. */}
-          <div className="flex min-h-0 flex-col gap-4 overflow-hidden">
+          <div className="flex min-h-0 flex-col gap-3 overflow-hidden">
             <section>
               <h3 className="mb-1 text-xl font-bold text-blue-300">Playback</h3>
               <div>
@@ -969,8 +977,25 @@ function PlaybackDiagnosticsOverlay({ visible, exportVisible, player }: Props) {
             </section>
           </div>
 
-          {/* Column 2: HLS level state, the fragment it produced, and failure totals. */}
-          <div className="flex min-h-0 flex-col gap-4 overflow-hidden">
+          {/* Column 2: the event history alone, so it gets the full column height. */}
+          <section className="flex min-h-0 flex-col overflow-hidden">
+            <h3 className="mb-1 text-xl font-bold text-blue-300">Recent Events</h3>
+            <div className="min-h-0 flex-1 overflow-hidden">
+              {history
+                .slice()
+                .reverse()
+                .map((item) => (
+                  <div key={item.id}>
+                    {formatTimestamp(item.timestamp)} {item.source} {item.name}
+                    {item.details ? ` - ${item.details}` : ''}
+                  </div>
+                ))}
+              {!history.length && <div>none</div>}
+            </div>
+          </section>
+
+          {/* Column 3: HLS level state, the fragment it produced, and failure totals. */}
+          <div className="flex min-h-0 flex-col gap-3 overflow-hidden">
             <section>
               <h3 className="mb-1 text-xl font-bold text-blue-300">HLS</h3>
               <div>active: {String(snapshot.hls.active)}</div>
@@ -1005,23 +1030,6 @@ function PlaybackDiagnosticsOverlay({ visible, exportVisible, player }: Props) {
               </div>
             </section>
           </div>
-
-          {/* Column 3: the event history alone, so it gets the full column height. */}
-          <section className="flex min-h-0 flex-col overflow-hidden">
-            <h3 className="mb-1 text-xl font-bold text-blue-300">Recent Events</h3>
-            <div className="min-h-0 flex-1 overflow-hidden">
-              {history
-                .slice()
-                .reverse()
-                .map((item) => (
-                  <div key={item.id}>
-                    {formatTimestamp(item.timestamp)} {item.source} {item.name}
-                    {item.details ? ` - ${item.details}` : ''}
-                  </div>
-                ))}
-              {!history.length && <div>none</div>}
-            </div>
-          </section>
         </div>
       )}
     </div>

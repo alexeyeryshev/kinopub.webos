@@ -88,14 +88,17 @@ Use this checklist on an LG webOS TV after installing a build that includes the 
 
 - Open the overlay during normal playback.
 - Confirm the left column shows `Playback`, `Buffer`, `Segment Pipeline`, `Decode Quality`.
-- Confirm the middle column shows `HLS`, `Last Fragment`, `Failure Summary`.
-- Confirm the right column shows only `Recent Events`, and that it runs from the top of the column
+- Confirm the middle column shows only `Recent Events`, and that it runs from the top of the column
   down to the bottom of the panel rather than stopping after a few entries.
+- Confirm the right column shows `HLS`, `Last Fragment`, `Failure Summary`.
+- Confirm a `QR` button is visible in the panel header, left of the `Back: закрыть` hint.
 - Let several events accumulate and confirm noticeably more of them are visible than before.
 
 ## Capture Export
 
-- Open player settings and select `Экспорт диагностики (QR)`.
+- With the diagnostics panels open, activate the `QR` button in the header (Magic Remote pointer),
+  and separately confirm the `Yellow` colour key does the same thing.
+- Confirm `Yellow` does nothing when the diagnostics panels are closed.
 - Confirm a QR code appears with the caption showing the payload length and `(сжато)`. If it says
   `(без сжатия)`, the TV runtime has no `CompressionStream`; note that, since it roughly doubles the
   code size.
@@ -109,7 +112,8 @@ Use this checklist on an LG webOS TV after installing a build that includes the 
   ```
 
 - Confirm the decoded event list is newest-first and its timestamps line up with the overlay.
-- Press Back and confirm the export view closes and playback is unaffected.
+- Press Back and confirm the export view closes back to the diagnostics panels, and that a second
+  Back then closes the panels themselves. Playback must be unaffected throughout.
 - Open the export again and confirm the QR does not change or flicker while it is on screen (the
   capture is frozen at the moment it was opened).
 

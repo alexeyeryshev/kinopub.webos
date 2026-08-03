@@ -60,8 +60,8 @@ than by source:
 
 - column 1 — what the local pipeline is doing: `Playback`, `Buffer`, `Segment Pipeline`,
   `Decode Quality`;
-- column 2 — what HLS chose and what came of it: `HLS`, `Last Fragment`, `Failure Summary`;
-- column 3 — `Recent Events`, alone.
+- column 2 — `Recent Events`, alone;
+- column 3 — what HLS chose and what came of it: `HLS`, `Last Fragment`, `Failure Summary`.
 
 `Recent Events` gets a column to itself because it is the only unbounded section: sharing a column
 capped it to a handful of visible entries, which hid exactly the run-up to a stall that the history
@@ -242,14 +242,28 @@ Diagnostic state must be isolated, bounded, and discarded when playback unmounts
 
 ## Capture Export
 
-The overlay can serialize its current state into a QR code (`Экспорт диагностики (QR)` in the player
-settings) so a report can leave the TV without a network round trip. That constraint drives the whole
+The overlay can serialize its current state into a QR code so a report can leave the TV without a
+network round trip. That constraint drives the whole
 design: the failure under investigation is a network stall, so any transport that uploads from the
 app is unavailable exactly when the capture matters. Scanning with a phone works regardless.
 
 Sending to the Sentry DSN already present in `src/utils/logging.ts` is not an option either — it
 belongs to the upstream project, so the data would go to a third party and stay invisible to whoever
 is debugging this fork.
+
+### Entry point
+
+A `QR` button sits in the diagnostics panel header, next to the `Back: закрыть` hint — the capture
+belongs to the diagnostics screen rather than the settings menu, since that is where the state being
+captured is on display.
+
+The overlay stays `pointer-events-none` so it never intercepts player input; only the button opts
+back in via `pointer-events-auto`, which keeps it clickable with the Magic Remote pointer. Remotes
+without a pointer reach the same action with the `Yellow` colour key, which is only bound while the
+diagnostics panels are visible.
+
+The capture is taken once, when the view opens, and does not refresh while it is on screen: a QR
+that changed mid-scan would be unscannable.
 
 ### Pipeline
 
