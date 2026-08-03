@@ -7,7 +7,24 @@ import { getVideoNode } from './getVideoNode';
 
 const HISTORY_LIMIT = 30;
 const VIDEO_EVENTS = ['playing', 'waiting', 'stalled', 'canplay', 'canplaythrough', 'seeking', 'seeked', 'error', 'ended'];
-const HLS_EVENT_KEYS = ['FRAG_BUFFERED', 'FRAG_CHANGED', 'LEVEL_SWITCHED', 'ERROR'];
+const HLS_EVENT_KEYS = [
+  'FRAG_LOADING',
+  'FRAG_LOADED',
+  'FRAG_LOAD_EMERGENCY_ABORTED',
+  'FRAG_BUFFERED',
+  'FRAG_CHANGED',
+  'BUFFER_APPENDING',
+  'BUFFER_APPENDED',
+  'LEVEL_SWITCHED',
+  'ERROR',
+];
+
+// hls.js categorizes buffer-starvation symptoms as MEDIA_ERROR because they surface through the
+// media element, so they must be matched by `details` before falling back to `type`.
+// `bufferFullError` is deliberately excluded: it is a SourceBuffer quota-exceeded/append-capacity
+// failure (the buffer is too full to append), the opposite condition from starvation, and falls
+// through to the media/decode-failure category instead.
+const BUFFER_STARVATION_DETAILS = new Set(['bufferStalledError', 'bufferSeekOverHole', 'bufferNudgeOnStall']);
 
 type Nullable<T> = T | null;
 
@@ -38,6 +55,33 @@ type LastFragmentInfo = {
   loadSeconds?: number;
   throughputMbps?: number;
 };
+
+type FailureCategory = 'network' | 'buffer' | 'media' | 'other';
+
+type FailureCounts = Record<FailureCategory, number>;
+
+type FragLoadStage = {
+  status: 'loading' | 'loaded' | 'aborted';
+  level?: number;
+  height?: number;
+  sn?: number | string;
+  startedAt: number;
+  durationSeconds?: number;
+};
+
+// Keyed by `frag.type` ('main' | 'audio' | 'subtitle'): main and audio fragments load concurrently
+// on streams with alternate audio, so a single shared stage would let one hide a stall in the other.
+type FragLoadStagesByStream = Record<string, FragLoadStage>;
+
+type BufferAppendStage = {
+  status: 'appending' | 'appended';
+  startedAt: number;
+  durationSeconds?: number;
+};
+
+// Keyed by the SourceBuffer type ('video' | 'audio' | 'audiovideo') for the same reason: video and
+// audio buffers append independently, so one completing must not hide a stall in the other.
+type BufferAppendStagesByType = Record<string, BufferAppendStage>;
 
 type PlaybackSnapshot = {
   currentTime: number;
@@ -327,8 +371,9 @@ function takeSnapshot(video: Nullable<HTMLVideoElement>, hls: Nullable<HLS>): Nu
 }
 
 function getFragmentInfo(data: any, hls: HLS): LastFragmentInfo {
-  const stats = data?.stats || {};
   const frag = data?.frag || {};
+  // FRAG_BUFFERED carries top-level stats; FRAG_LOADED and buffer-append events only expose them on the fragment itself.
+  const stats = data?.stats || frag.stats || {};
   const level = getFiniteNumber(frag.level) ?? getFiniteNumber(data?.level);
   const levelInfo = level !== undefined ? hls.levels?.[level] : undefined;
   const bytes = getFiniteNumber(stats.loaded) ?? getFiniteNumber(stats.total);
@@ -345,6 +390,89 @@ function getFragmentInfo(data: any, hls: HLS): LastFragmentInfo {
     loadSeconds,
     throughputMbps: bytes !== undefined && loadSeconds && loadSeconds > 0 ? (bytes * 8) / loadSeconds / 1000 / 1000 : undefined,
   };
+}
+
+function formatFragmentIdentity(frag: any, hls: HLS) {
+  const level = getFiniteNumber(frag?.level);
+  const height = level !== undefined ? getFiniteNumber(hls.levels?.[level]?.height) : undefined;
+  const label = height ? `${height}p` : level !== undefined ? `level ${level}` : 'unknown level';
+  const sn = frag?.sn;
+
+  return sn !== undefined && sn !== null ? `${label}, sn ${sn}` : label;
+}
+
+function getFailureCategory(data: any): FailureCategory {
+  const details = typeof data?.details === 'string' ? data.details : undefined;
+
+  if (details && BUFFER_STARVATION_DETAILS.has(details)) {
+    return 'buffer';
+  }
+
+  if (data?.type === 'networkError') {
+    return 'network';
+  }
+
+  if (data?.type === 'mediaError' || data?.type === 'muxError') {
+    return 'media';
+  }
+
+  return 'other';
+}
+
+function formatCategoryLabel(category: FailureCategory) {
+  switch (category) {
+    case 'network':
+      return 'network failure';
+    case 'buffer':
+      return 'buffer starvation';
+    case 'media':
+      return 'media/decode failure';
+    default:
+      return 'other failure';
+  }
+}
+
+function formatFragLoadStageValue(stage: FragLoadStage) {
+  const identity = stage.height ? `${stage.height}p` : stage.level !== undefined ? `level ${stage.level}` : 'unknown level';
+  const snLabel = stage.sn !== undefined && stage.sn !== null ? `, sn ${stage.sn}` : '';
+
+  if (stage.status === 'loading') {
+    return `${identity}${snLabel} - loading (${formatSeconds((Date.now() - stage.startedAt) / 1000)})`;
+  }
+
+  if (stage.status === 'aborted') {
+    return `${identity}${snLabel} - aborted (low bandwidth)`;
+  }
+
+  return `${identity}${snLabel} - loaded in ${formatSeconds(stage.durationSeconds)}`;
+}
+
+function formatFragLoadStages(stages: FragLoadStagesByStream) {
+  const entries = Object.entries(stages);
+
+  if (!entries.length) {
+    return 'idle';
+  }
+
+  return entries.map(([streamType, stage]) => `${streamType}: ${formatFragLoadStageValue(stage)}`).join('; ');
+}
+
+function formatBufferAppendStageValue(stage: BufferAppendStage) {
+  if (stage.status === 'appending') {
+    return `appending (${formatSeconds((Date.now() - stage.startedAt) / 1000)})`;
+  }
+
+  return `appended in ${formatSeconds(stage.durationSeconds)}`;
+}
+
+function formatBufferAppendStages(stages: BufferAppendStagesByType) {
+  const entries = Object.entries(stages);
+
+  if (!entries.length) {
+    return 'idle';
+  }
+
+  return entries.map(([bufferType, stage]) => `${bufferType}: ${formatBufferAppendStageValue(stage)}`).join('; ');
 }
 
 function formatLastFragment(fragment?: LastFragmentInfo) {
@@ -366,6 +494,7 @@ function getErrorDetails(data: any) {
     getHostname(data?.context?.url) || getHostname(response?.url) || getHostname(data?.frag?.url) || getHostname(data?.url) || undefined;
   const parts = [
     data?.fatal ? 'fatal' : 'non-fatal',
+    formatCategoryLabel(getFailureCategory(data)),
     sanitizeText(data?.type),
     sanitizeText(data?.details),
     status !== undefined ? `HTTP ${status}` : undefined,
@@ -384,13 +513,29 @@ function getHlsEventDetails(name: string, data: any, hls: HLS) {
     const level = getFiniteNumber(data?.level);
     const height = level !== undefined ? getFiniteNumber(hls.levels?.[level]?.height) : undefined;
 
-    return [level !== undefined ? `level ${level}` : undefined, height ? `${height}p` : undefined].filter(Boolean).join(', ');
+    return ['level switch', level !== undefined ? `level ${level}` : undefined, height ? `${height}p` : undefined]
+      .filter(Boolean)
+      .join(', ');
   }
 
-  if (name === 'FRAG_CHANGED' || name === 'FRAG_BUFFERED') {
-    const fragment = getFragmentInfo(data, hls);
+  if (name === 'FRAG_CHANGED' || name === 'FRAG_BUFFERED' || name === 'FRAG_LOADED') {
+    return formatLastFragment(getFragmentInfo(data, hls));
+  }
 
-    return formatLastFragment(fragment);
+  if (name === 'FRAG_LOADING') {
+    return `${formatFragmentIdentity(data?.frag, hls)} - load start`;
+  }
+
+  if (name === 'FRAG_LOAD_EMERGENCY_ABORTED') {
+    return `${formatFragmentIdentity(data?.frag, hls)} - emergency abort (low bandwidth)`;
+  }
+
+  if (name === 'BUFFER_APPENDING') {
+    return `${sanitizeText(data?.type) || 'unknown'} - append start`;
+  }
+
+  if (name === 'BUFFER_APPENDED') {
+    return `${sanitizeText(data?.type) || 'unknown'} - append complete`;
   }
 
   return undefined;
@@ -401,7 +546,13 @@ function PlaybackDiagnosticsOverlay({ visible, player }: Props) {
   const [snapshot, setSnapshot] = useState<Nullable<PlaybackSnapshot>>(null);
   const [history, setHistory] = useState<DiagnosticHistoryItem[]>([]);
   const [lastFragment, setLastFragment] = useState<LastFragmentInfo | undefined>();
+  const [fragLoadStages, setFragLoadStages] = useState<FragLoadStagesByStream>({});
+  const [bufferAppendStages, setBufferAppendStages] = useState<BufferAppendStagesByType>({});
+  const [emergencyAbortCount, setEmergencyAbortCount] = useState(0);
+  const [failureCounts, setFailureCounts] = useState<FailureCounts>({ network: 0, buffer: 0, media: 0, other: 0 });
+  const [lastFailure, setLastFailure] = useState<Nullable<{ category: FailureCategory; timestamp: number }>>(null);
   const nextHistoryId = useRef(1);
+  const pendingAppendStarts = useRef<Map<string, number>>(new Map());
 
   const pushHistory = useCallback((source: DiagnosticHistoryItem['source'], name: string, details?: string) => {
     setHistory((items) => [
@@ -476,11 +627,95 @@ function PlaybackDiagnosticsOverlay({ visible, player }: Props) {
 
     const hls = target.hls;
     const hlsEvents = (HLS as any).Events || {};
+    const pendingAppends = pendingAppendStarts.current;
+
+    // Reset lifecycle/failure state for the new HLS instance so it reflects only the current source.
+    setFragLoadStages({});
+    setBufferAppendStages({});
+    setEmergencyAbortCount(0);
+    setFailureCounts({ network: 0, buffer: 0, media: 0, other: 0 });
+    setLastFailure(null);
+    pendingAppends.clear();
+
     const handlers = HLS_EVENT_KEYS.map((key) => {
       const eventName = hlsEvents[key];
       const handler = (_event: string, data: any) => {
+        if (key === 'FRAG_LOADING') {
+          const frag = data?.frag;
+          const streamType = typeof frag?.type === 'string' ? frag.type : 'main';
+          const level = getFiniteNumber(frag?.level);
+
+          setFragLoadStages((stages) => ({
+            ...stages,
+            [streamType]: {
+              status: 'loading',
+              level,
+              height: level !== undefined ? getFiniteNumber(hls.levels?.[level]?.height) : undefined,
+              sn: frag?.sn,
+              startedAt: Date.now(),
+            },
+          }));
+        }
+
+        if (key === 'FRAG_LOADED') {
+          const frag = data?.frag;
+          const streamType = typeof frag?.type === 'string' ? frag.type : 'main';
+          const info = getFragmentInfo(data, hls);
+
+          setFragLoadStages((stages) => ({
+            ...stages,
+            [streamType]: {
+              status: 'loaded',
+              level: info.level,
+              height: info.height,
+              sn: frag?.sn,
+              startedAt: Date.now() - (info.loadSeconds ? info.loadSeconds * 1000 : 0),
+              durationSeconds: info.loadSeconds,
+            },
+          }));
+        }
+
+        if (key === 'FRAG_LOAD_EMERGENCY_ABORTED') {
+          const frag = data?.frag;
+          const streamType = typeof frag?.type === 'string' ? frag.type : 'main';
+
+          setEmergencyAbortCount((count) => count + 1);
+          setFragLoadStages((stages) =>
+            stages[streamType] ? { ...stages, [streamType]: { ...stages[streamType], status: 'aborted' } } : stages,
+          );
+        }
+
         if (key === 'FRAG_BUFFERED') {
           setLastFragment(getFragmentInfo(data, hls));
+        }
+
+        if (key === 'BUFFER_APPENDING') {
+          const bufferType = typeof data?.type === 'string' ? data.type : 'unknown';
+
+          pendingAppends.set(bufferType, Date.now());
+          setBufferAppendStages((stages) => ({ ...stages, [bufferType]: { status: 'appending', startedAt: Date.now() } }));
+        }
+
+        if (key === 'BUFFER_APPENDED') {
+          const bufferType = typeof data?.type === 'string' ? data.type : 'unknown';
+          const startedAt = pendingAppends.get(bufferType);
+
+          pendingAppends.delete(bufferType);
+          setBufferAppendStages((stages) => ({
+            ...stages,
+            [bufferType]: {
+              status: 'appended',
+              startedAt: startedAt ?? Date.now(),
+              durationSeconds: startedAt !== undefined ? (Date.now() - startedAt) / 1000 : undefined,
+            },
+          }));
+        }
+
+        if (key === 'ERROR') {
+          const category = getFailureCategory(data);
+
+          setFailureCounts((counts) => ({ ...counts, [category]: counts[category] + 1 }));
+          setLastFailure({ category, timestamp: Date.now() });
         }
 
         pushHistory('hls', key, getHlsEventDetails(key, data, hls));
@@ -497,6 +732,7 @@ function PlaybackDiagnosticsOverlay({ visible, player }: Props) {
       handlers.forEach(({ eventName, handler }) => {
         (hls as any).off(eventName, handler);
       });
+      pendingAppends.clear();
     };
   }, [target.hls, pushHistory]);
 
@@ -581,6 +817,39 @@ function PlaybackDiagnosticsOverlay({ visible, player }: Props) {
             <h3 className="mb-1 text-xl font-bold text-blue-300">Last Fragment</h3>
             <div>{formatLastFragment(lastFragment)}</div>
             <div>last successful: {formatSeconds(lastSuccessfulFragmentAge)} ago</div>
+          </section>
+
+          <section>
+            <h3 className="mb-1 text-xl font-bold text-blue-300">Segment Pipeline</h3>
+            <div
+              className={cx({
+                'text-yellow-300': Object.values(fragLoadStages).some((stage) => stage.status === 'loading'),
+              })}
+            >
+              load: {formatFragLoadStages(fragLoadStages)}
+            </div>
+            <div
+              className={cx({
+                'text-yellow-300': Object.values(bufferAppendStages).some((stage) => stage.status === 'appending'),
+              })}
+            >
+              append: {formatBufferAppendStages(bufferAppendStages)}
+            </div>
+            <div>emergency aborts: {emergencyAbortCount}</div>
+          </section>
+
+          <section>
+            <h3 className="mb-1 text-xl font-bold text-blue-300">Failure Summary</h3>
+            <div>network: {failureCounts.network}</div>
+            <div>buffer starvation: {failureCounts.buffer}</div>
+            <div>media/decode: {failureCounts.media}</div>
+            <div>other: {failureCounts.other}</div>
+            <div className={cx({ 'text-yellow-300': Boolean(lastFailure) })}>
+              last:{' '}
+              {lastFailure
+                ? `${formatCategoryLabel(lastFailure.category)}, ${formatSeconds((Date.now() - lastFailure.timestamp) / 1000)} ago`
+                : 'none'}
+            </div>
           </section>
 
           <section>

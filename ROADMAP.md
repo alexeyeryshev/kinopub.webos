@@ -48,6 +48,12 @@ The earlier working hypothesis was buffer starvation rather than an obvious deco
 
 ### 2. P0 — Complete diagnostics around the HLS fragment lifecycle
 
+Implemented: the overlay now covers fragment load start/completion, buffer append start/completion,
+emergency aborts, and a network/buffer-starvation/media-decode/other failure breakdown. See
+`docs/playback-diagnostics-spec.md` (Segment Loading, Errors) and
+`docs/playback-diagnostics-manual-test.md` (Segment Pipeline, Network Interruption, Buffer Starvation) for
+the current behavior and manual test steps. The remaining bullets below describe the scope that was covered.
+
 The current overlay already observes buffered fragments, level switches, and errors. Extend it only where the pinned HLS.js version exposes the events reliably:
 
 - fragment load start/completion;
