@@ -63,6 +63,7 @@ const Player: React.FC<PlayerProps> = ({
   const [isDiagnosticsVisible, setIsDiagnosticsVisible] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(true);
   const [isPauseByOKClickActive] = useStorageState<boolean>('is_pause_by_ok_click_active');
+  const [subtitleOpacity] = useStorageState<number>('subtitle_opacity', 1);
   const [currentSourceName, setCurrentSourceName] = useState<string | null>(null);
 
   const activeSource = sources?.find((s) => s.name === currentSourceName) || sources?.find((s) => s.default) || sources?.[0];
@@ -162,6 +163,17 @@ const Player: React.FC<PlayerProps> = ({
       return false;
     }
   }, [isDiagnosticsVisible, isSettingsOpen, isEpisodesOpen]);
+
+  useEffect(() => {
+    const styleId = 'subtitle-opacity-style';
+    let styleEl = document.getElementById(styleId) as HTMLStyleElement | null;
+    if (!styleEl) {
+      styleEl = document.createElement('style');
+      styleEl.id = styleId;
+      document.head.appendChild(styleEl);
+    }
+    styleEl.textContent = `video::cue { opacity: ${subtitleOpacity ?? 1}; }`;
+  }, [subtitleOpacity]);
 
   useEffect(() => {
     let intervalId: NodeJS.Timeout;

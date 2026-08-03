@@ -6,10 +6,18 @@ import Button from 'components/button';
 import { AudioTrack, SourceTrack, SubtitleTrack } from 'components/media';
 import Popup from 'components/popup';
 import Select from 'components/select';
+import useStorageState from 'hooks/useStorageState';
 
 import { getVideoNode } from './getVideoNode';
 
 const NONE = 'NONE';
+
+const SUBTITLE_OPACITY_OPTIONS = [
+  { title: '100%', value: 1 },
+  { title: '75%', value: 0.75 },
+  { title: '50%', value: 0.5 },
+  { title: '25%', value: 0.25 },
+];
 
 type Props = {
   visible: boolean;
@@ -27,6 +35,7 @@ const Settings: React.FC<Props> = ({ visible, diagnosticsVisible, onClose, onDia
   const [currentSource, setCurrentSource] = useState<string | null>(null);
   const [subtitles, setSubtitles] = useState<SubtitleTrack[]>([]);
   const [currentSubtitle, setCurrentSubtitle] = useState<string | null>(NONE);
+  const [subtitleOpacity, setSubtitleOpacity] = useStorageState<number>('subtitle_opacity', 1);
 
   const audioOptions = useMemo(() => map(audios, (audio) => ({ title: `${audio.number} ${audio.name}`, value: audio.name })), [audios]);
   const sourceOptions = useMemo(() => map(sources, (source) => ({ title: source.name, value: source.name })), [sources]);
@@ -71,6 +80,12 @@ const Settings: React.FC<Props> = ({ visible, diagnosticsVisible, onClose, onDia
       handleVideoUpdate('subtitleTrack', subtitle);
     },
     [handleVideoUpdate],
+  );
+  const handleSubtitleOpacityChange = useCallback(
+    (opacity: number) => {
+      setSubtitleOpacity(opacity);
+    },
+    [setSubtitleOpacity],
   );
 
   const handleClose = useCallback(() => {
@@ -133,6 +148,16 @@ const Settings: React.FC<Props> = ({ visible, diagnosticsVisible, onClose, onDia
           value={currentSubtitle}
           options={subtitleOptions}
           onChange={handleSubtitleChange}
+          splitIn={4}
+        />
+      )}
+      {subtitleOptions.length > 1 && (
+        <Select
+          className="my-1"
+          label="Яркость субтитров"
+          value={subtitleOpacity ?? 1}
+          options={SUBTITLE_OPACITY_OPTIONS}
+          onChange={handleSubtitleOpacityChange}
           splitIn={4}
         />
       )}

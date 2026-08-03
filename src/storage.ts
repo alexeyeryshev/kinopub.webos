@@ -12,6 +12,7 @@ export type Key =
   | 'default_quality'
   | 'default_audio_lang'
   | 'default_subtitle_lang'
+  | 'subtitle_opacity'
   | `item_${string}_saved_audio_name`
   | `item_${string}_saved_source_name`
   | `item_${string}_saved_subtitle_name`;
