@@ -51,23 +51,29 @@ export function getLevelVideoRange(level: any): VideoRange | undefined {
 }
 
 /**
- * The range of the stream as a whole: the level actually playing if it declares one, otherwise the
- * first level that does.
+ * The range of the stream: whatever the level being played says, or — only while no level has been
+ * chosen — the first level that declares anything.
  *
- * The fallback matters at startup and in Auto mode, where `currentLevel` is -1 until hls.js picks
- * one. Every level of a master playlist normally shares a transfer function — a playlist mixing HDR
- * and SDR variants would be unusual — so the first declaration is a sound stand-in for a few
- * seconds rather than showing nothing.
+ * The fallback exists for startup and Auto mode, where `currentLevel` is -1 until hls.js picks one;
+ * without it the badge would flicker and a fresh title would briefly seed the wrong subtitle
+ * default. It stops the moment a level is selected, and that boundary matters: a *selected* level
+ * declaring nothing means "unknown for what is playing", not "go and ask its siblings".
+ *
+ * A master playlist here really can mix transfer functions. `mixedPlaylist` in the API is documented
+ * as building an HLS4 playlist "из всех доступных файлов AVC+HEVC", so borrowing `PQ` from a
+ * neighbouring variant while an SDR one plays would dim subtitles to the HDR default and light up
+ * the HDR badge on SDR content — the same class of confident-but-wrong answer the codec guess used
+ * to give.
  */
 export function getStreamVideoRange(levels: any[] | undefined, currentLevel?: number): VideoRange | undefined {
   if (!levels?.length) {
     return undefined;
   }
 
-  const current = currentLevel !== undefined && currentLevel >= 0 ? getLevelVideoRange(levels[currentLevel]) : undefined;
+  const selected = currentLevel !== undefined && currentLevel >= 0 ? levels[currentLevel] : undefined;
 
-  if (current) {
-    return current;
+  if (selected) {
+    return getLevelVideoRange(selected);
   }
 
   for (const level of levels) {

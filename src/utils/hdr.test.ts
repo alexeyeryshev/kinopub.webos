@@ -47,8 +47,13 @@ describe('getStreamVideoRange', () => {
     expect(getStreamVideoRange([undeclared, hdr], undefined)).toBe('PQ');
   });
 
-  it('falls back when the playing level alone is undeclared', () => {
-    expect(getStreamVideoRange([hdr, undeclared], 1)).toBe('PQ');
+  it('does not borrow a range from a sibling once a level is playing', () => {
+    // This test previously asserted the opposite and so locked in a bug. A master playlist here can
+    // genuinely mix transfer functions -- `mixedPlaylist` builds an HLS4 playlist from all
+    // available AVC+HEVC files -- so answering `PQ` because *some other* variant declares it would
+    // dim subtitles to the HDR default and light the HDR badge while an SDR level plays.
+    expect(getStreamVideoRange([hdr, undeclared], 1)).toBeUndefined();
+    expect(getStreamVideoRange([hdr, sdr], 1)).toBe('SDR');
   });
 
   it('says nothing when no level declares anything', () => {
