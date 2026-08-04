@@ -8,6 +8,10 @@ history of the conversations that produced them.
 Everything below cites a file, a line, a command, or a workflow run. Where a claim could not be
 established from the repository, it says so instead of asserting it.
 
+This is a snapshot, not a live status page: findings describe the tree at that commit, and line
+numbers drift as the code moves. `ROADMAP.md` tracks what has since been addressed — each item there
+carries the finding it came from.
+
 ---
 
 ## 1. Executive assessment

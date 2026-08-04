@@ -16,6 +16,26 @@
 
 export type EpisodeOutcome = 'recovered' | 'abandoned';
 
+/**
+ * How the episode came to an end.
+ *
+ * `abandoned` on its own conflates two very different stories: the player exhausting every budget
+ * while the viewer waited, and the viewer walking away mid-recovery. The second is by far the more
+ * common ending — leaving is what people do when a picture freezes — and counting it as the first
+ * would make every abandonment statistic describe a population that mostly did not exist.
+ */
+export type EpisodeEnd =
+  /** Playback moved again. */
+  | 'progress'
+  /** Every budget was spent and nothing resumed within the grace period. */
+  | 'grace-period'
+  /** A new source replaced the failing one, e.g. a quality change. */
+  | 'source-change'
+  /** The viewer asked for a retry from the failure notice. */
+  | 'manual-retry'
+  /** The player went away — the viewer pressed Back, or moved to another episode. */
+  | 'teardown';
+
 export type EpisodeCrumb = {
   category: string;
   message: string;
@@ -25,6 +45,8 @@ export type EpisodeCrumb = {
 
 export type EpisodeSummary = {
   outcome: EpisodeOutcome;
+  /** Which of the endings above produced this report. */
+  endedBy: EpisodeEnd;
   startedAt: number;
   endedAt: number;
   durationMs: number;
@@ -97,13 +119,14 @@ export function createPlaybackEpisodeTracker(sink: EpisodeSink) {
     }
   }
 
-  function finish(outcome: EpisodeOutcome, now: number, recoveredAfter?: string) {
+  function finish(outcome: EpisodeOutcome, now: number, endedBy: EpisodeEnd, recoveredAfter?: string) {
     if (startedAt === undefined) {
       return;
     }
 
     const summary: EpisodeSummary = {
       outcome,
+      endedBy,
       startedAt,
       endedAt: now,
       durationMs: now - startedAt,
@@ -221,20 +244,27 @@ export function createPlaybackEpisodeTracker(sink: EpisodeSink) {
       const credit = after || actions[actions.length - 1];
 
       sink.breadcrumb({ category: 'playback', message: 'playback resumed', level: 'info', data: { after: credit } });
-      finish('recovered', now, credit);
+      finish('recovered', now, 'progress', credit);
     },
 
     /** Call periodically so an armed abandonment can fire without further events. */
     tick(now: number) {
       if (startedAt !== undefined && abandonAt !== undefined && now >= abandonAt) {
-        finish('abandoned', now);
+        finish('abandoned', now, 'grace-period');
       }
     },
 
-    /** A new source is a new story. Any episode in flight is reported as abandoned first. */
-    reset(now: number) {
+    /**
+     * Closes whatever is in flight and starts clean.
+     *
+     * `endedBy` is what makes the report worth having. The default covers a new source replacing the
+     * failing one; pass `teardown` when the player itself is going away, which is the ending nobody
+     * was recording before — the viewer pressing Back is the most likely way a failed playback ends,
+     * and dropping those reports left the abandonment data describing only the people who waited.
+     */
+    reset(now: number, endedBy: EpisodeEnd = 'source-change') {
       if (startedAt !== undefined) {
-        finish('abandoned', now);
+        finish('abandoned', now, endedBy);
       }
 
       reset();

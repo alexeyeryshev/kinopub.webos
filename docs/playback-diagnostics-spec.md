@@ -380,6 +380,34 @@ disagree.
 
 The rule lives in `src/utils/decodeHealth.ts` with unit tests.
 
+## Playback Failure Notice
+
+The recovery budgets exist so a refusing CDN is not hammered indefinitely. Draining them turned an
+endless retry loop into a _silent_ failure: the player stopped trying and nothing said so, leaving a
+frozen frame and a `recovery:` line inside an overlay reached through the settings menu.
+
+A centred notice now appears when playback is over and the player will not fix it:
+
+- **When.** Only when every recovery path is spent. For an hls.js source that means _both_ the
+  fatal-error budget and the stall watchdog report `exhausted` — they recover from different
+  failures and act independently, so one spent budget while the other is still reloading the
+  playlist is not the end. For a source played without hls.js the media element's own `error` is
+  the whole story, since nothing retries it.
+- **What.** A short line in Russian saying playback stopped and why, the underlying
+  `type / details` in small text, a `Повторить` button, and a `Back: выйти` hint.
+- **Retry.** Rebuilds the media pipeline rather than restarting the stopped one: a fatal hls.js
+  error leaves the loading engine dead for good, so `startLoad()` on it does nothing. The teardown
+  path already preserves the playback position, so a retry resumes where the picture froze.
+- **Focus.** The button takes focus when the notice appears, so the action is reachable from a
+  remote without a pointer. The panel itself stays `pointer-events-none`, like the diagnostics
+  overlay, so it never swallows a press meant for the player underneath.
+- **Deference.** Hidden while the settings popup, the episode picker, the diagnostics overlay or the
+  QR export is up. The state is terminal and will still be there afterwards; stealing focus from a
+  popup would be worse than waiting.
+
+It deliberately says nothing while recovery is still running. Reporting every retry would train a
+viewer to ignore it, and while a budget remains there is a real chance playback resumes.
+
 ## Error Reporting
 
 Playback failures are reported to Sentry as well as shown on screen. The QR capture remains the
@@ -406,8 +434,21 @@ Each recovery step becomes a Sentry breadcrumb (`fatal-retry`, `media-recover`, 
 - **recovered** — playback moved again. The tag `playback_recovered_after` names the last action
   taken, which is the field worth grouping on: it says which recovery path actually beats this
   failure.
-- **abandoned** — every budget was spent and playback never resumed within a 30 s grace period,
-  long enough to cover the watchdog's full 8 s restart / 20 s playlist-reload escalation.
+- **abandoned** — playback never came back. The `playback_episode_ended_by` tag says how the episode
+  ended, which matters more than it sounds:
+
+  - `grace-period` — every budget was spent and nothing resumed within 30 s, long enough to cover
+    the watchdog's full 8 s restart / 20 s playlist-reload escalation. This is the player giving up,
+    and the only ending reported at `error` level.
+  - `teardown` — the player went away mid-recovery: the viewer pressed Back, or moved to another
+    episode. This is the most likely way a broken playback ends, and it was previously **not
+    reported at all** — the tracker was only closed on a source change, never on unmount, so every
+    abandonment statistic described the minority of viewers who waited out the grace period.
+  - `source-change` — a new source replaced the failing one, e.g. a quality change.
+  - `manual-retry` — the viewer retried from the failure notice.
+
+  The last three are recorded at `warning` level: someone ended the episode deliberately, which is
+  worth knowing but is not the player failing.
 
 Volume is the binding constraint. The failure under investigation emits roughly three errors a
 second; breadcrumbing each would fill Sentry's 100-entry buffer in about half a minute and evict
