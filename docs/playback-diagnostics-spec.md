@@ -402,10 +402,22 @@ exactly the early context that explains the episode. Repeated errors are therefo
 summarised at most once every 10 s, while the rare, meaningful steps are recorded individually. The
 full per-category counts still travel in the episode summary.
 
-Playback carrying on immediately after a fatal error does _not_ count as recovery: a fatal error
-stops hls.js's loading engine, so what continues is the buffer draining. The episode stays open until
-a recovery action has actually been attempted, otherwise one failure arrives as two unrelated
+An episode is resolved by the _same evidence that refills the retry budget_: a media fragment
+buffering on the stream that was failing (`provesStreamRecovered`). Position moving is deliberately
+not enough. A fatal error stops hls.js's loading engine, so playback carrying on afterwards is the
+buffer draining, and crediting that to whichever retry happened to be in flight would make
+`playback_recovered_after` — the one field worth grouping on — lie. The episode also stays open
+until a recovery action has actually been attempted, otherwise one failure arrives as two unrelated
 reports.
+
+Arming the abandonment deadline is idempotent per budget. The watchdog re-enters its exhausted
+branch on every tick while playback stays stalled, and re-arming there would push the deadline out
+faster than time passes, so the abandoned episode would never be reported at all.
+
+Failures the player tries to recover from are reported _only_ as episodes. The standalone
+`logPlaybackIssue` path is limited to `decode-health-severe`, which is not an episode; sending both
+would tell the same story twice and spend twice the quota. The stream context those reports carried
+— quality, streaming type, level count, bandwidth estimate — moves onto the episode summary.
 
 The state machine is in `src/utils/playbackEpisode.ts` with unit tests; `sentryEpisodeSink` in
 `src/utils/logging.ts` is the only part that touches Sentry.
