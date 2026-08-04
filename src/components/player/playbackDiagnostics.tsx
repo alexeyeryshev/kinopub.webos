@@ -11,6 +11,7 @@ import DiagnosticsQr from './diagnosticsQr';
 import { getVideoNode } from './getVideoNode';
 
 import { APP_VERSION } from 'utils/app';
+import { getLevelVideoRange, readDisplayDynamicRange } from 'utils/hdr';
 import { FailureCategory, formatCategoryLabel, getFailureCategory } from 'utils/hlsFailures';
 import { getLevelQualityHeight } from 'utils/hlsLevels';
 
@@ -127,6 +128,10 @@ type PlaybackSnapshot = {
     audioTrackIndex?: number;
     audioTrackCount: number;
     audioTrackName?: string;
+    /** `VIDEO-RANGE` of the level being played, when the manifest declares one. */
+    videoRange?: string;
+    /** Whether the display can show HDR. A capability, not the mode the content is in. */
+    displayRange: string;
   };
 };
 
@@ -362,6 +367,7 @@ function getHlsSnapshot(hls: Nullable<HLS>) {
       levels: [],
       mode: 'n/a',
       audioTrackCount: 0,
+      displayRange: readDisplayDynamicRange(),
     };
   }
 
@@ -388,6 +394,8 @@ function getHlsSnapshot(hls: Nullable<HLS>) {
     audioTrackIndex: audioTrackIndex === -1 ? undefined : audioTrackIndex,
     audioTrackCount: audioTracks.length,
     audioTrackName: currentAudioTrack ? [currentAudioTrack.name, currentAudioTrack.lang].filter(Boolean).join(' ') : undefined,
+    videoRange: getLevelVideoRange(levels[getHlsNumber(hls, 'currentLevel') ?? -1]),
+    displayRange: readDisplayDynamicRange(),
   };
 }
 
@@ -932,6 +940,8 @@ function PlaybackDiagnosticsOverlay({ visible, exportVisible, onExportToggle, pl
         autoLevelCapping: hlsState.autoLevelCapping,
         bandwidthEstimate: hlsState.bandwidthEstimate,
         levels: hlsState.levels,
+        videoRange: hlsState.videoRange,
+        displayRange: hlsState.displayRange,
       },
       audio: hlsState.audioTrackCount
         ? {
@@ -1039,7 +1049,7 @@ function PlaybackDiagnosticsOverlay({ visible, exportVisible, onExportToggle, pl
   }
 
   return (
-    <div className="pointer-events-none absolute z-101 top-14 left-6 right-6 bottom-6 flex flex-col overflow-hidden rounded bg-black bg-opacity-80 p-4 text-white ring">
+    <div className="pointer-events-none absolute z-101 top-14 left-6 right-6 bottom-6 flex flex-col overflow-hidden rounded bg-black bg-opacity-80 p-4 text-gray-300 ring">
       <div className="mb-3 flex items-center justify-between">
         <div className="text-2xl font-bold">Диагностика воспроизведения</div>
         <div className="flex items-center">
@@ -1155,6 +1165,12 @@ function PlaybackDiagnosticsOverlay({ visible, exportVisible, onExportToggle, pl
                   believes is selected, and that mismatch is invisible unless both are on screen. */}
               <div className={cx({ 'text-yellow-300': isAudioSelectionMismatched })}>selected audio: {target.selectedAudio ?? 'n/a'}</div>
               <div className={cx({ 'text-yellow-300': isAudioSelectionMismatched })}>playing audio: {formatAudioTrack(snapshot.hls)}</div>
+              {/* Both HDR signals, because neither is sufficient on its own and we are still
+                  finding out whether the first is present in these manifests at all. `VIDEO-RANGE`
+                  would say what the content is; `display` only says what the panel can do. */}
+              <div>
+                video range: {snapshot.hls.videoRange ?? 'not declared'} / display: {snapshot.hls.displayRange}
+              </div>
               <div>available: {snapshot.hls.levels.join(', ') || 'n/a'}</div>
             </section>
 

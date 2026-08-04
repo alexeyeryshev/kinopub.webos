@@ -825,7 +825,26 @@ Ordered by priority, then by what unblocks what.
 
 ### A12 — Reproduce and isolate subtitle brightness, including whether HDR is involved
 
-- **Status:** Open — blocked on device evidence
+> **Reproduced on the TV; the HDR component is real.** > [#19](https://github.com/kaaburgh/kinopub.webos/issues/19) records it: at 100% subtitles are
+> "much brighter than the video itself" in HDR, 25% was the best of the offered values, and SDR sat
+> around 50-75%. So the premise this item existed to test holds, and one setting cannot serve both.
+>
+> **Shipped:** the range now reaches 15% and 10%, since 25% was simultaneously the floor and the
+> preferred value; brightness is remembered per title (and so per series), which sidesteps HDR
+> detection entirely for anything watched twice; and the diagnostics panel is grey rather than pure
+> white, which is what an HDR display maps to peak brightness.
+>
+> **Not done, and why.** Selecting the value automatically needs to know whether HDR is playing, and
+> `src/utils/hdr.ts` documents why nothing available answers that today: the codec guess is wrong
+> (HEVC is not HDR), the `dynamic-range` media query reports a display capability rather than the
+> current mode, the pinned hls.js does not parse `VIDEO-RANGE`, and the API exposes no per-file
+> flag. The overlay now reports the two signals that might exist, so the question can be answered
+> from a capture instead of guessed at. Also still open: whether reducing the cue _colour_ would
+> beat reducing its opacity — opacity fades the cue background along with the text, costing contrast
+> on bright scenes, while a dimmer colour lowers emitted luminance and keeps it. That is a change of
+> mechanism and wants a device before it is made.
+
+- **Status:** Partially implemented — automatic selection blocked on device evidence
 - **Priority:** Medium
 - **Category:** Subtitles / HDR
 - **Origin:** Item 5's unperformed reproduction steps; review §4.8
