@@ -92,6 +92,18 @@ export type ExportCapture = {
     bandwidthEstimate?: number;
     levels: string[];
   };
+  /**
+   * Audio selection, as both sides see it. The player's choice and the track hls.js is actually
+   * playing are separate facts, and a capture that carried only one of them could not show the
+   * mismatch a media-element re-attach produces.
+   */
+  audio?: {
+    selectedName?: string;
+    selectedIndex?: number;
+    playingIndex?: number;
+    playingName?: string;
+    trackCount: number;
+  };
   lastFragment?: {
     level?: number;
     height?: number;
@@ -184,6 +196,14 @@ export function buildCompactText(capture: ExportCapture) {
       )}|${num(h.autoLevelCapping)}|${num(h.bandwidthEstimate)}`,
     );
     lines.push(`l|${h.levels.map(clean).join(';')}`);
+  }
+
+  // A separate line rather than more fields on `h|`: the decoder skips tags it does not know, so an
+  // older reader handles a newer capture by dropping this and nothing else.
+  if (capture.audio) {
+    const a = capture.audio;
+
+    lines.push(`a|${clean(a.selectedName)}|${num(a.selectedIndex)}|${num(a.playingIndex)}|${a.trackCount}|${clean(a.playingName)}`);
   }
 
   if (capture.lastFragment) {

@@ -137,6 +137,7 @@ export type MediaRef = {
   readonly videoElement: HTMLVideoElement | null;
   readonly hls: HLS | null;
   readonly recovery: RecoveryState;
+  readonly audioTrackIndex: number;
   readonly failure: PlaybackFailure | undefined;
   readonly decodeHealth: DecodeHealth;
   currentTime: number;
@@ -304,6 +305,9 @@ function useVideoPlayer({
 
   const getAudioTracks = useCallback(() => (streamingType === 'hls2' ? [] : audioTracks), [audioTracks, streamingType]);
   const getAudioTrack = useCallback(() => currentAudioTrack?.name, [currentAudioTrack]);
+  // The position the player believes is selected. Exposed so diagnostics can hold it next to what
+  // hls.js is actually playing: the two drifting apart is a real defect and is otherwise invisible.
+  const getAudioTrackIndex = useCallback(() => currentAudioTrackIndexRef.current, []);
   const setAudioTrack = useCallback(
     (audioTrackName: string) => {
       const audioTrackIndex = audioTracks?.findIndex((audioTrack) => audioTrack.name === audioTrackName) ?? -1;
@@ -578,6 +582,38 @@ function useVideoPlayer({
               attempt: mediaRecoveryAttempts,
               limit: RECOVERY_MAX_MEDIA_ATTEMPTS,
               swapAudioCodec: mediaRecoveryAttempts > 1,
+            });
+
+            // `recoverMediaError()` is more destructive than its name suggests. It detaches and
+            // re-attaches the media element, and on the way out hls.js's buffer controller does
+            // `media.removeAttribute('src'); media.load()`. That resets `currentTime` to zero and
+            // drops every buffered range; on re-attach the stream controller starts from
+            // `config.startPosition`, which for this configuration is the beginning of the
+            // playlist. Recovering from one decoder hiccup therefore threw the viewer back to the
+            // start of the film -- reported from a TV, with a capture showing playback at 6.9 s
+            // while the loader was still working on segment 14 near the two-minute mark.
+            //
+            // The audio selection does not survive the round trip either. Nothing reloads the
+            // manifest, so the `MANIFEST_PARSED` handler that normally restores it never runs, and
+            // the effect keyed on `isLoaded` cannot re-fire because `isLoaded` never goes back to
+            // false. Playback resumed in a different language from the one the settings menu still
+            // displayed, and only changing the track by hand put it right.
+            //
+            // Registered before the call, because the re-attach happens synchronously inside it.
+            const resumeAt = videoRef.current?.currentTime;
+
+            hls.once(HLS.Events.MEDIA_ATTACHED, () => {
+              const recoveredAudioTrack = hls.audioTracks?.[currentAudioTrackIndexRef.current];
+
+              if (recoveredAudioTrack) {
+                hls.audioTrack = recoveredAudioTrack.id;
+              }
+
+              // The stream controller has already called `startLoad(config.startPosition)` by the
+              // time this runs, so this overrides where it resumes from.
+              if (resumeAt !== undefined && resumeAt > 0) {
+                hls.startLoad(resumeAt);
+              }
             });
 
             if (mediaRecoveryAttempts > 1) {
@@ -943,6 +979,7 @@ function useVideoPlayer({
       getDecodeHealth,
       getAudioTracks,
       getAudioTrack,
+      getAudioTrackIndex,
       setAudioTrack,
       getSourceTracks,
       getSourceTrack,
@@ -960,6 +997,7 @@ function useVideoPlayer({
       getDecodeHealth,
       getAudioTracks,
       getAudioTrack,
+      getAudioTrackIndex,
       setAudioTrack,
       getSourceTracks,
       getSourceTrack,
@@ -1075,6 +1113,9 @@ function useVideoPlayerApi(ref: React.ForwardedRef<MediaRef>, props: OwnProps) {
       },
       get recovery() {
         return player.getRecovery();
+      },
+      get audioTrackIndex() {
+        return player.getAudioTrackIndex();
       },
       get failure() {
         return player.getFailure();

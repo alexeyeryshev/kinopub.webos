@@ -720,6 +720,47 @@ Ordered by priority, then by what unblocks what.
   command. A scenario that only works sometimes is not finished.
 - **Estimated scope:** Medium. Small per scenario once the harness and the Sentry gate exist.
 
+### A20 — Media recovery is a blunt instrument for the errors it is used on
+
+- **Status:** Investigation first
+- **Priority:** Medium
+- **Category:** Playback recovery
+- **Origin:** [#18](https://github.com/kaaburgh/kinopub.webos/issues/18), while fixing what it
+  reported
+- **Problem or opportunity:** Every fatal `mediaError` goes through `recoverMediaError()`, which
+  detaches and re-attaches the media element. That is a very large hammer, and the two symptoms
+  reported in #18 — playback restarting from the beginning, and the audio track reverting — were
+  both consequences of the hammer rather than of the original fault. Those are fixed by preserving
+  position and re-applying the selection, but the underlying question is untouched: is a full
+  detach/attach the right response to, say, an audio-track playlist that failed to load?
+- **Concrete evidence:** The capture in #18 recorded
+  `recovery: reason=mediaError / audioTrackLoadError`. hls.js's buffer controller does
+  `media.removeAttribute('src'); media.load()` on detach
+  (`node_modules/hls.js/dist/hls.js:4319-4325`), which resets `currentTime` and drops every buffered
+  range; on re-attach the stream controller resumes from `config.startPosition` (`:3042-3044`). The
+  same capture showed the CDN refusing one specific segment (`sn 14`, `HTTP 0` then `HTTP 502`) for
+  minutes on end, so the audio-track failure may well be the same edge problem wearing a different
+  hat.
+- **Motivation and expected benefit:** A cheaper recovery for playlist-level failures would avoid
+  rebuilding the pipeline at all, and rebuilding it is exactly what produced two viewer-visible
+  regressions. Fewer sledgehammers, fewer things to put back afterwards.
+- **Proposed direction:** Learn first. `playback_recovered_after` and the episode breadcrumbs now
+  record which recovery ran and whether it worked; group by `playback_reason` to see which error
+  details actually reach the media path and how often each recovery succeeds. Only then consider
+  splitting the response — for instance retrying an audio-track playlist directly, and reserving
+  `recoverMediaError()` for genuine decode failures.
+- **Dependencies and sequencing:** Needs episode data, so it follows the same device session as
+  **A5** and **A6**. Nothing to build until then.
+- **Compatibility risks:** Changing which recovery runs for which error is the riskiest edit in this
+  area, and it has already produced two regressions when done implicitly. It should not be done on a
+  hunch.
+- **Confidence:** runtime — high on the mechanism, read from the pinned hls.js. `assumed` on whether
+  a narrower recovery would work at all.
+- **Validation and acceptance criteria:** A recorded breakdown of media-path errors by `details`
+  and outcome, then a decision written down either way — including "leave it alone", which is a
+  legitimate result.
+- **Estimated scope:** Small to investigate; unknown to change.
+
 ### A19 — Move the Sentry DSN out of the source and rotate it
 
 - **Status:** Open

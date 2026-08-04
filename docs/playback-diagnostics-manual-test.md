@@ -92,8 +92,26 @@ Use this checklist on an LG webOS TV after installing a build that includes the 
 - Confirm the audio line is never labelled with a video resolution. An audio fragment's `level` is a
   track index, so resolving it against the video levels would name it after an unrelated quality.
 - Sanity-check the sizes: a 2160p video fragment is megabytes, an audio fragment a few hundred KB.
+- Confirm the load duration and throughput are real numbers rather than `n/a`. They read `n/a` for
+  as long as the overlay looked them up under their hls.js 0.x names, which is easy to mistake for
+  an idle stream.
+- On letterboxed content, confirm a level is named the same way everywhere: if the level list says
+  `405p (720x302)`, the fragment and pipeline lines must say `405p` too, not `302p`.
 - Confirm `main last successful` tracks the video stream, so it keeps climbing if video stalls while
   audio keeps arriving.
+
+## Audio Track After A Recovery
+
+- Play a title with several audio tracks and select one that is not the first.
+- Confirm the `HLS` section shows `selected audio` and `playing audio` agreeing, and that neither is
+  highlighted.
+- Provoke a media error — the decoder rejecting data, or an audio-track playlist that fails to load.
+- Confirm playback resumes **from where it was**, not from the beginning of the film. A jump back to
+  the start is the regression this guards: `recoverMediaError()` detaches the media element, and
+  hls.js's buffer controller calls `media.load()` on the way out, which resets `currentTime` and
+  drops the buffer.
+- Confirm the audio track is still the selected one, in the picture and in both diagnostics lines.
+  If they disagree the two lines turn yellow, and a capture taken then carries the same mismatch.
 
 ## Overlay Layout
 

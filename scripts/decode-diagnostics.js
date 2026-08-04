@@ -177,6 +177,14 @@ function parseCompactText(text) {
         autoLevelCapping: optional(parts[8]),
         bandwidthEstimateBps: optional(parts[9]),
       };
+    } else if (tag === 'a') {
+      report.audio = {
+        selectedName: optional(parts[1]),
+        selectedIndex: optional(parts[2]),
+        playingIndex: optional(parts[3]),
+        trackCount: Number(parts[4]),
+        playingName: optional(parts[5]),
+      };
     } else if (tag === 'l') {
       report.levels = optional(parts[1]);
     } else if (tag === 'f') {
@@ -262,6 +270,19 @@ function formatReport(report) {
 
   if (report.levels) {
     lines.push(`levels:   ${report.levels}`);
+  }
+
+  if (report.audio) {
+    const a = report.audio;
+    // Flagged rather than merely printed: the player's selection and the track hls.js is playing
+    // drifting apart is a defect, and it is easy to read past two numbers that look similar.
+    const mismatch = a.selectedIndex !== undefined && a.playingIndex !== undefined && a.selectedIndex !== a.playingIndex;
+
+    lines.push(
+      `audio:    selected=${a.selectedName || 'n/a'}${a.selectedIndex === undefined ? '' : ` (index ${a.selectedIndex})`} playing=${
+        a.playingIndex === undefined ? 'n/a' : `track ${a.playingIndex}`
+      }${a.playingName ? ` (${a.playingName})` : ''} of ${a.trackCount}${mismatch ? '   *** MISMATCH ***' : ''}`,
+    );
   }
 
   if (report.lastFragment) {
