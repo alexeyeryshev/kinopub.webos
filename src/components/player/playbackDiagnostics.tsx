@@ -51,12 +51,17 @@ type BufferedRange = {
 
 type LastFragmentInfo = {
   timestamp: number;
+  /** `frag.type`: 'main' | 'audio' | 'subtitle'. Decides how `level` may be read. */
+  streamType: string;
   level?: number;
   height?: number;
   bytes?: number;
   loadSeconds?: number;
   throughputMbps?: number;
 };
+
+/** Keyed by `frag.type`, because video and audio fragments arrive interleaved. */
+type LastFragmentsByStream = Record<string, LastFragmentInfo>;
 
 type FailureCounts = Record<FailureCategory, number>;
 
@@ -398,8 +403,13 @@ function getFragmentInfo(data: any, hls: HLS): LastFragmentInfo {
   const frag = data?.frag || {};
   // FRAG_BUFFERED carries top-level stats; FRAG_LOADED and buffer-append events only expose them on the fragment itself.
   const stats = data?.stats || frag.stats || {};
+  const streamType = typeof frag.type === 'string' ? frag.type : 'main';
   const level = getFiniteNumber(frag.level) ?? getFiniteNumber(data?.level);
-  const levelInfo = level !== undefined ? hls.levels?.[level] : undefined;
+  // `frag.level` indexes whichever playlist set produced the fragment. For audio and subtitles that
+  // is the track list (audio-stream-controller.ts builds its own `levels` from the audio tracks),
+  // so resolving it against `hls.levels` would name an audio fragment after a video resolution --
+  // an audio track at index 2 reads as "1080p" purely because video level 2 happens to be 1080p.
+  const levelInfo = streamType === 'main' && level !== undefined ? hls.levels?.[level] : undefined;
   const bytes = getFiniteNumber(stats.loaded) ?? getFiniteNumber(stats.total);
   const requestTime = getFiniteNumber(stats.trequest);
   const loadTime = getFiniteNumber(stats.tload);
@@ -408,8 +418,9 @@ function getFragmentInfo(data: any, hls: HLS): LastFragmentInfo {
 
   return {
     timestamp: Date.now(),
+    streamType,
     level,
-    height: getFiniteNumber(levelInfo?.height) ?? getFiniteNumber(frag.height),
+    height: streamType === 'main' ? getFiniteNumber(levelInfo?.height) ?? getFiniteNumber(frag.height) : undefined,
     bytes,
     loadSeconds,
     throughputMbps: bytes !== undefined && loadSeconds && loadSeconds > 0 ? (bytes * 8) / loadSeconds / 1000 / 1000 : undefined,
@@ -417,16 +428,31 @@ function getFragmentInfo(data: any, hls: HLS): LastFragmentInfo {
 }
 
 function formatFragmentIdentity(frag: any, hls: HLS) {
+  const streamType = typeof frag?.type === 'string' ? frag.type : 'main';
   const level = getFiniteNumber(frag?.level);
-  const height = level !== undefined ? getFiniteNumber(hls.levels?.[level]?.height) : undefined;
-  const label = height ? `${height}p` : level !== undefined ? `level ${level}` : 'unknown level';
+  // Same trap as in `getFragmentInfo`: only a main fragment's level indexes `hls.levels`.
+  const height = streamType === 'main' && level !== undefined ? getFiniteNumber(hls.levels?.[level]?.height) : undefined;
+  const quality = height
+    ? `${height}p`
+    : level !== undefined
+    ? streamType === 'main'
+      ? `level ${level}`
+      : `track ${level}`
+    : 'unknown level';
+  const label = streamType === 'main' ? quality : `${streamType} ${quality}`;
   const sn = frag?.sn;
 
   return sn !== undefined && sn !== null ? `${label}, sn ${sn}` : label;
 }
 
-function formatFragLoadStageValue(stage: FragLoadStage) {
-  const identity = stage.height ? `${stage.height}p` : stage.level !== undefined ? `level ${stage.level}` : 'unknown level';
+function formatFragLoadStageValue(stage: FragLoadStage, streamType: string) {
+  const identity = stage.height
+    ? `${stage.height}p`
+    : stage.level !== undefined
+    ? streamType === 'main'
+      ? `level ${stage.level}`
+      : `track ${stage.level}`
+    : 'unknown level';
   const snLabel = stage.sn !== undefined && stage.sn !== null ? `, sn ${stage.sn}` : '';
 
   if (stage.status === 'loading') {
@@ -447,7 +473,7 @@ function formatFragLoadStages(stages: FragLoadStagesByStream) {
     return 'idle';
   }
 
-  return entries.map(([streamType, stage]) => `${streamType}: ${formatFragLoadStageValue(stage)}`).join('; ');
+  return entries.map(([streamType, stage]) => `${streamType}: ${formatFragLoadStageValue(stage, streamType)}`).join('; ');
 }
 
 function formatBufferAppendStageValue(stage: BufferAppendStage) {
@@ -468,16 +494,41 @@ function formatBufferAppendStages(stages: BufferAppendStagesByType) {
   return entries.map(([bufferType, stage]) => `${bufferType}: ${formatBufferAppendStageValue(stage)}`).join('; ');
 }
 
+function formatFragmentLevel(fragment: LastFragmentInfo) {
+  if (fragment.height) {
+    return `${fragment.height}p`;
+  }
+
+  if (fragment.level === undefined) {
+    return 'unknown level';
+  }
+
+  // Only a main fragment's level is a video quality; anything else is a track index.
+  return fragment.streamType === 'main' ? `level ${fragment.level}` : `track ${fragment.level}`;
+}
+
 function formatLastFragment(fragment?: LastFragmentInfo) {
   if (!fragment) {
     return 'none yet';
   }
 
-  const level = fragment.height ? `${fragment.height}p` : fragment.level !== undefined ? `level ${fragment.level}` : 'unknown level';
-
-  return `${level}, ${formatBytes(fragment.bytes)}, ${formatSeconds(fragment.loadSeconds)}, ${formatBitrate(
+  return `${formatFragmentLevel(fragment)}, ${formatBytes(fragment.bytes)}, ${formatSeconds(fragment.loadSeconds)}, ${formatBitrate(
     fragment.throughputMbps !== undefined ? fragment.throughputMbps * 1000 * 1000 : undefined,
   )}`;
+}
+
+function formatLastFragments(fragments: LastFragmentsByStream, now: number) {
+  const entries = Object.entries(fragments);
+
+  if (!entries.length) {
+    return ['none yet'];
+  }
+
+  return entries.map(([streamType, fragment]) => {
+    const age = formatSeconds((now - fragment.timestamp) / 1000);
+
+    return `${streamType}: ${formatLastFragment(fragment)}, ${age} ago`;
+  });
 }
 
 function getErrorDetails(data: any) {
@@ -538,7 +589,7 @@ function PlaybackDiagnosticsOverlay({ visible, exportVisible, onExportToggle, pl
   const [target, setTarget] = useState<DiagnosticsTarget>({ video: null, hls: null, selectedQuality: null });
   const [snapshot, setSnapshot] = useState<Nullable<PlaybackSnapshot>>(null);
   const [history, setHistory] = useState<DiagnosticHistoryItem[]>([]);
-  const [lastFragment, setLastFragment] = useState<LastFragmentInfo | undefined>();
+  const [lastFragments, setLastFragments] = useState<LastFragmentsByStream>({});
   const [recovery, setRecovery] = useState<RecoveryState | undefined>();
   const [fragLoadStages, setFragLoadStages] = useState<FragLoadStagesByStream>({});
   const [bufferAppendStages, setBufferAppendStages] = useState<BufferAppendStagesByType>({});
@@ -627,6 +678,7 @@ function PlaybackDiagnosticsOverlay({ visible, exportVisible, onExportToggle, pl
 
     // Reset lifecycle/failure state for the new HLS instance so it reflects only the current source.
     setFragLoadStages({});
+    setLastFragments({});
     setBufferAppendStages({});
     setEmergencyAbortCount(0);
     setFailureCounts({ network: 0, buffer: 0, media: 0, other: 0 });
@@ -646,7 +698,7 @@ function PlaybackDiagnosticsOverlay({ visible, exportVisible, onExportToggle, pl
             [streamType]: {
               status: 'loading',
               level,
-              height: level !== undefined ? getFiniteNumber(hls.levels?.[level]?.height) : undefined,
+              height: streamType === 'main' && level !== undefined ? getFiniteNumber(hls.levels?.[level]?.height) : undefined,
               sn: frag?.sn,
               startedAt: Date.now(),
             },
@@ -682,7 +734,12 @@ function PlaybackDiagnosticsOverlay({ visible, exportVisible, onExportToggle, pl
         }
 
         if (key === 'FRAG_BUFFERED') {
-          setLastFragment(getFragmentInfo(data, hls));
+          const buffered = getFragmentInfo(data, hls);
+
+          // Keyed by stream: video and audio fragments interleave, so a single slot showed
+          // whichever landed last -- almost always the audio one, since it buffers a moment after
+          // the video fragment it accompanies.
+          setLastFragments((current) => ({ ...current, [buffered.streamType]: buffered }));
         }
 
         if (key === 'BUFFER_APPENDING') {
@@ -750,7 +807,10 @@ function PlaybackDiagnosticsOverlay({ visible, exportVisible, onExportToggle, pl
     };
   }, [visible, target, readMediaRef]);
 
-  const lastSuccessfulFragmentAge = lastFragment ? (Date.now() - lastFragment.timestamp) / 1000 : undefined;
+  // Deliberately the main stream: audio continuing to buffer while video is stuck is exactly the
+  // situation this panel needs to make visible rather than hide behind a healthy-looking number.
+  const lastMainFragment = lastFragments.main;
+  const lastSuccessfulFragmentAge = lastMainFragment ? (Date.now() - lastMainFragment.timestamp) / 1000 : undefined;
 
   useEffect(() => {
     if (!exportVisible) {
@@ -802,13 +862,13 @@ function PlaybackDiagnosticsOverlay({ visible, exportVisible, onExportToggle, pl
         bandwidthEstimate: hlsState.bandwidthEstimate,
         levels: hlsState.levels,
       },
-      lastFragment: lastFragment
+      lastFragment: lastMainFragment
         ? {
-            level: lastFragment.level,
-            height: lastFragment.height,
-            bytes: lastFragment.bytes,
-            loadSeconds: lastFragment.loadSeconds,
-            ageSeconds: (capturedAt - lastFragment.timestamp) / 1000,
+            level: lastMainFragment.level,
+            height: lastMainFragment.height,
+            bytes: lastMainFragment.bytes,
+            loadSeconds: lastMainFragment.loadSeconds,
+            ageSeconds: (capturedAt - lastMainFragment.timestamp) / 1000,
           }
         : undefined,
       pipeline: {
@@ -1015,8 +1075,10 @@ function PlaybackDiagnosticsOverlay({ visible, exportVisible, onExportToggle, pl
 
             <section>
               <h3 className="mb-1 text-xl font-bold text-blue-300">Last Fragment</h3>
-              <div>{formatLastFragment(lastFragment)}</div>
-              <div>last successful: {formatSeconds(lastSuccessfulFragmentAge)} ago</div>
+              {formatLastFragments(lastFragments, Date.now()).map((line) => (
+                <div key={line.split(':')[0]}>{line}</div>
+              ))}
+              <div>main last successful: {formatSeconds(lastSuccessfulFragmentAge)} ago</div>
             </section>
 
             <section>
