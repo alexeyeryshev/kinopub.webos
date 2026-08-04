@@ -342,7 +342,21 @@ Ordered by priority, then by what unblocks what.
 
 ### A3 — Report backend and API failures
 
-- **Status:** Open
+> **Implemented, validation incomplete.** `src/api/base.ts` now reports three kinds of failure —
+> `unreachable`, `http`, `malformed` — through `logApiFailure`, one per endpoint per kind per
+> session. The return contract is unchanged, deliberately: the OAuth device flow reads
+> `response.error`, so reporting sits beside the existing behaviour rather than reshaping it. Query
+> strings are stripped and numeric path segments collapsed to `{id}` before anything is tagged, so
+> no `access_token` leaves and tag cardinality stays bounded. Exempt from status reporting: 401, and
+> the single OAuth grant that polls (`device_token`) — not the grants that start pairing or renew a
+> session, since a broken refresh logs the viewer out and is the failure most worth hearing about.
+> Transport failures are reported on every request. Rules and tests live in
+> `src/utils/apiFailures.ts` (21 tests). **Not yet seen against the real backend** — the exemptions
+> are reasoned from the code, and the one that would hurt if wrong is the polling exemption, since a
+> regression there floods the quota during device pairing and nothing would say so until the quota
+> was gone.
+
+- **Status:** Completed, validation incomplete
 - **Priority:** High
 - **Category:** Error reporting / observability
 - **Origin:** Review §4.10
@@ -394,11 +408,11 @@ Ordered by priority, then by what unblocks what.
 > 3. **No Sentry runtime gate is needed**, since the web surface is going away. `docs/ci.md` records
 >    that gating comes first if a web build is ever wanted again.
 >
-> **Still flagged, not actioned:** `netlify.toml` at the repository root is a second, inherited
-> deployment config with the same consequence. It is inert unless someone connects the repository to
-> a Netlify account, so it was left in place rather than removed unasked — but it is documented as
-> decommissioned in `docs/ci.md`, and deleting it would be tidier than leaving a loaded config lying
-> around.
+> `netlify.toml`, a second inherited deployment config with the same consequence, was removed in a
+> follow-up. Two further decisions were taken by the owner and split out rather than folded in here:
+> a web build is still wanted, but for reproducing playback problems rather than for publishing
+> (**A18**), and the DSN stays in source for now with rotation and relocation tracked separately
+> (**A19**).
 
 - **Status:** Completed
 - **Priority:** High
@@ -655,6 +669,90 @@ Ordered by priority, then by what unblocks what.
   playback and during a failure — dropped-frame ratio and subjective UI responsiveness are the
   available instruments.
 - **Estimated scope:** Small to measure; unknown to fix.
+
+### A18 — A web build for reproducing playback problems, with scripted scenarios
+
+- **Status:** Open
+- **Priority:** Medium
+- **Category:** Test infrastructure
+- **Origin:** Requested after **A4** removed the public deployment; enables **A5**, **A6**, **A11**
+- **Problem or opportunity:** Every open investigation in this roadmap is gated on somebody sitting
+  in front of a television at the moment a rare failure happens, then reading it back through a QR
+  code. A browser build would put the same player somewhere with real developer tools — network
+  throttling, request blocking, a debugger, `chrome://media-internals` — and let a failure be
+  _induced_ rather than waited for. That turns "reproduce the stall" from an evening of luck into a
+  scripted run.
+- **Concrete evidence:** The app already runs in a browser: `src/utils/enviroment.ts` selects
+  `BrowserRouter` when the origin is http, `yarn start` serves it, and until **A4** it was built and
+  published on every push to `master`. What was removed was the _public_ deployment, not the
+  capability. Meanwhile **A5** (decode thresholds), **A6** (does the watchdog rescue anything, and
+  why does the CDN answer `HTTP 0` after a seek) and **A11** (cost of always-on diagnostics) have
+  all been open since the review with no data, because each needs a device and a failure at the same
+  time.
+- **Motivation and expected benefit:** The specific scenarios worth scripting are the ones already
+  observed on the TV and never reproduced on demand:
+  - a segment the CDN refuses — block one fragment URL and confirm the fatal-error budget drains,
+    the backoff escalates, and the failure notice appears;
+  - a non-fatal stall — block segments without letting hls.js escalate, and confirm the watchdog's
+    restart/reload escalation and then the notice;
+  - a seek into an unbuffered region, which is the condition under which `HTTP 0` was captured;
+  - bandwidth collapse, to watch ABR move quality on its own;
+  - a stall followed by leaving the player, to confirm the `teardown` episode is _delivered_ and not
+    merely queued — the open question left by **A2**.
+- **Proposed direction:** Local or preview-only, never a permanent public URL: **A4** removed that
+  for a reason and this must not quietly restore it. Gate Sentry initialisation on the webOS runtime
+  first, so a browser session cannot report into the TV's project. Then a small Playwright script
+  per scenario, driving the app with request interception; Chromium and Playwright are already
+  available in the development container. Keep the scripts beside `docs/` as documented procedures,
+  not as CI jobs — they exercise a real backend and a real CDN, which does not belong in CI.
+- **Dependencies and sequencing:** Sentry gating comes first. Nothing else blocks it. Doing it
+  before another TV session would make that session far more productive.
+- **Compatibility risks:** The honest limit, and it should be written into the scripts rather than
+  discovered later: **a browser is not the television**. The webOS decoder, the panel's frame
+  pacing, the CDN's behaviour towards the TV's address and user agent, and Chromium's MSE
+  implementation all differ. A scenario that reproduces in a browser proves the _application_ logic
+  handles it; one that does not reproduce proves nothing about the TV. Decode-health thresholds
+  (**A5**) in particular cannot be validated this way.
+- **Confidence:** code — high that the app runs in a browser. Unknown whether the specific failures
+  reproduce there at all; that is the first thing to find out.
+- **Validation and acceptance criteria:** Each scenario drives the player to a named, observable
+  end state — budget exhausted, notice shown, episode reported — reproducibly, from a documented
+  command. A scenario that only works sometimes is not finished.
+- **Estimated scope:** Medium. Small per scenario once the harness and the Sentry gate exist.
+
+### A19 — Move the Sentry DSN out of the source and rotate it
+
+- **Status:** Open
+- **Priority:** Low
+- **Category:** Configuration / privacy
+- **Origin:** **A4**, deferred deliberately by the repository owner
+- **Problem or opportunity:** The DSN is a literal in tracked source, in a public repository, and was
+  additionally served in a public bundle for as long as the GitHub Pages deployment was live. A DSN
+  is an ingest endpoint, not a credential — the worst case is somebody posting junk events into the
+  project and spending the quota — which is why this is Low rather than urgent, and why the
+  convention is common enough to be unremarkable. It is still worth fixing.
+- **Concrete evidence:** `src/utils/logging.ts:16` holds the value inline. The repository is public.
+  `.github/workflows/deploy-pages.yml` published the built bundle to `gh-pages` until **A4** removed
+  it; retiring the already-published branch is a manual step recorded there.
+- **Motivation and expected benefit:** Rotating invalidates whatever was exposed; moving the value
+  to configuration means the next fork, or the next public build, does not inherit this one's
+  project — which is exactly the mistake this fork inherited from upstream and spent **A4** undoing.
+- **Proposed direction:** Read it from `process.env.REACT_APP_SENTRY_DSN`, alongside the API
+  configuration already in `.env`, and skip `Sentry.init` entirely when it is absent so a build
+  without the value is silent rather than broken. Then rotate the key in Sentry and update the
+  value. Note that `.env` is tracked, so this relocates the value rather than hiding it — the real
+  protection is the rotation plus the ability to supply a different value at build time. Pairs
+  naturally with the runtime gate **A18** needs.
+- **Dependencies and sequencing:** None. Worth doing in the same change as **A18**'s Sentry gate,
+  since both touch initialisation.
+- **Compatibility risks:** Low, but note that `.env` is read at build time by `react-scripts`, so a
+  missing value fails silently at runtime rather than loudly at build — the skip-init path has to be
+  deliberate.
+- **Confidence:** code — high.
+- **Validation and acceptance criteria:** A build with no DSN configured starts and plays with no
+  Sentry traffic; a build with one configured reports as before; the old key no longer accepts
+  events.
+- **Estimated scope:** Small.
 
 ### A12 — Reproduce and isolate subtitle brightness, including whether HDR is involved
 
