@@ -1,4 +1,11 @@
-import { apiFailureKey, describeApiFailure, isServerFault, normalizeEndpoint, shouldReportHttpStatus } from './apiFailures';
+import {
+  apiFailureKey,
+  describeApiFailure,
+  isAuthorizationPollingGrant,
+  isServerFault,
+  normalizeEndpoint,
+  shouldReportHttpStatus,
+} from './apiFailures';
 
 describe('normalizeEndpoint', () => {
   it('drops the query string, which carries the access token', () => {
@@ -44,12 +51,33 @@ describe('shouldReportHttpStatus', () => {
     expect(shouldReportHttpStatus(401)).toBe(false);
   });
 
-  it('ignores unsuccessful statuses from the OAuth device flow', () => {
+  it('ignores unsuccessful statuses from the OAuth polling request', () => {
     // Pairing polls this every ten seconds and *expects* an unsuccessful status carrying
     // `authorization_pending` until the user confirms elsewhere. Reporting it would mean a false
     // "endpoint is broken" every time somebody sets up a TV.
-    expect(shouldReportHttpStatus(400, { isAuthorizationRequest: true })).toBe(false);
-    expect(shouldReportHttpStatus(403, { isAuthorizationRequest: true })).toBe(false);
+    expect(shouldReportHttpStatus(400, { isAuthorizationPolling: true })).toBe(false);
+    expect(shouldReportHttpStatus(403, { isAuthorizationPolling: true })).toBe(false);
+  });
+
+  it('still reports failures from the OAuth requests that are not polling', () => {
+    // Starting pairing and renewing a session are single requests that expect to succeed. A broken
+    // refresh logs the viewer out, which is precisely the failure worth hearing about.
+    expect(shouldReportHttpStatus(500, { isAuthorizationPolling: false })).toBe(true);
+    expect(shouldReportHttpStatus(400, {})).toBe(true);
+  });
+});
+
+describe('isAuthorizationPollingGrant', () => {
+  it('recognises only the grant that polls', () => {
+    expect(isAuthorizationPollingGrant('device_token')).toBe(true);
+
+    // `device_code` starts pairing and `refresh_token` renews a session; both expect to succeed.
+    expect(isAuthorizationPollingGrant('device_code')).toBe(false);
+    expect(isAuthorizationPollingGrant('refresh_token')).toBe(false);
+
+    // A request with no grant at all is an ordinary API call.
+    expect(isAuthorizationPollingGrant(undefined)).toBe(false);
+    expect(isAuthorizationPollingGrant('')).toBe(false);
   });
 });
 

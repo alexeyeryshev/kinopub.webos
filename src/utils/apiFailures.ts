@@ -45,20 +45,34 @@ export function normalizeEndpoint(url: string) {
 }
 
 /**
+ * The one OAuth grant that polls, and therefore the only one whose unsuccessful statuses are
+ * routine. Pairing calls `/oauth2/device` with this every ten seconds and *expects* an unsuccessful
+ * status carrying `error: authorization_pending` until the user confirms on another device.
+ *
+ * The other grants this client uses — `device_code` to start pairing, `refresh_token` to renew a
+ * session — are single requests that expect to succeed. Exempting them too would hide the failures
+ * most worth having: a refresh that stops working logs the viewer out, which is exactly the "the app
+ * was weird last night" complaint this reporting exists to explain.
+ */
+export const AUTHORIZATION_POLLING_GRANT = 'device_token';
+
+export function isAuthorizationPollingGrant(grantType: unknown) {
+  return grantType === AUTHORIZATION_POLLING_GRANT;
+}
+
+/**
  * Whether an unsuccessful HTTP status is worth a report.
  *
  * Two exemptions, both for responses that are part of normal operation rather than a fault:
  *
  * - **401.** The access token expires routinely and the client refreshes it. Reporting that would
  *   mean reporting every session.
- * - **The OAuth device flow.** Pairing polls `/oauth2/device` every ten seconds and *expects* an
- *   unsuccessful status carrying `error: authorization_pending` until the user confirms on another
- *   device. Reporting those would send a burst of identical events every time somebody pairs a TV —
- *   the deduplication downstream would collapse them, but the first one would still be a false
- *   report of a broken endpoint. Transport failures on those requests are still worth having, so
- *   this only exempts the status, not the whole request.
+ * - **The OAuth polling request**, and only that one — see `AUTHORIZATION_POLLING_GRANT`. Reporting
+ *   those would send a false "endpoint is broken" every time somebody pairs a TV. Transport
+ *   failures on the polling request are still worth having, so this exempts the status, not the
+ *   whole request.
  */
-export function shouldReportHttpStatus(status: number, options: { isAuthorizationRequest?: boolean } = {}) {
+export function shouldReportHttpStatus(status: number, options: { isAuthorizationPolling?: boolean } = {}) {
   if (status >= 200 && status < 400) {
     return false;
   }
@@ -67,7 +81,7 @@ export function shouldReportHttpStatus(status: number, options: { isAuthorizatio
     return false;
   }
 
-  return !options.isAuthorizationRequest;
+  return !options.isAuthorizationPolling;
 }
 
 /**

@@ -347,12 +347,14 @@ Ordered by priority, then by what unblocks what.
 > session. The return contract is unchanged, deliberately: the OAuth device flow reads
 > `response.error`, so reporting sits beside the existing behaviour rather than reshaping it. Query
 > strings are stripped and numeric path segments collapsed to `{id}` before anything is tagged, so
-> no `access_token` leaves and tag cardinality stays bounded. 401 and the OAuth flow's expected
-> unsuccessful statuses are exempt; transport failures on those requests are not. Rules and tests
-> live in `src/utils/apiFailures.ts` (18 tests). **Not yet seen against the real backend** — the
-> exemptions are reasoned from the code, and the one that would hurt if wrong is the OAuth polling
-> exemption, since a regression there floods the quota during device pairing and nothing would say
-> so until the quota was gone.
+> no `access_token` leaves and tag cardinality stays bounded. Exempt from status reporting: 401, and
+> the single OAuth grant that polls (`device_token`) — not the grants that start pairing or renew a
+> session, since a broken refresh logs the viewer out and is the failure most worth hearing about.
+> Transport failures are reported on every request. Rules and tests live in
+> `src/utils/apiFailures.ts` (21 tests). **Not yet seen against the real backend** — the exemptions
+> are reasoned from the code, and the one that would hurt if wrong is the polling exemption, since a
+> regression there floods the quota during device pairing and nothing would say so until the quota
+> was gone.
 
 - **Status:** Completed, validation incomplete
 - **Priority:** High

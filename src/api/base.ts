@@ -1,7 +1,7 @@
 import isArray from 'lodash/isArray';
 import { serialize } from 'object-to-formdata';
 
-import { shouldReportHttpStatus } from 'utils/apiFailures';
+import { isAuthorizationPollingGrant, shouldReportHttpStatus } from 'utils/apiFailures';
 import { logApiFailure } from 'utils/logging';
 
 type Primitive = string | number | boolean;
@@ -55,10 +55,13 @@ class BaseApiClient {
    */
   private async request<T>(method: 'GET' | 'POST', url: string, params?: Params, data?: Params) {
     const accessToken = this.getAccessToken();
-    // The OAuth token endpoints are the one place an unsuccessful status is routine rather than a
-    // fault; see `shouldReportHttpStatus`. This is the same predicate that decides not to attach an
-    // access token, because it identifies the same requests.
-    const isAuthorizationRequest = Boolean(params?.['grant_type']);
+    const grantType = params?.['grant_type'];
+    // Two different questions, deliberately not the same predicate. *Any* OAuth request must go out
+    // without an access token attached. Only the polling one expects unsuccessful statuses -- the
+    // grants that start pairing and renew a session are single requests that expect to succeed, and
+    // exempting those would hide a broken login, which is the failure most worth hearing about.
+    const isAuthorizationRequest = Boolean(grantType);
+    const isAuthorizationPolling = isAuthorizationPollingGrant(grantType);
 
     if (accessToken && !isAuthorizationRequest) {
       params = {
@@ -88,7 +91,7 @@ class BaseApiClient {
       this.clearTokens();
     }
 
-    if (shouldReportHttpStatus(response.status, { isAuthorizationRequest })) {
+    if (shouldReportHttpStatus(response.status, { isAuthorizationPolling })) {
       logApiFailure({ kind: 'http', endpoint: url, method, status: response.status });
     }
 

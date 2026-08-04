@@ -505,9 +505,13 @@ decide whether pairing is still pending. Reporting sits beside the existing beha
 reshaping it.
 
 Two exemptions, both for responses that are normal rather than faulty: **401**, which is a token
-expiring on schedule, and **unsuccessful statuses from the OAuth device flow**, which polls every
-ten seconds and expects them until the user confirms on another device. Transport failures on those
-requests are still reported — the endpoint being unreachable is a fault whoever it belongs to.
+expiring on schedule, and **unsuccessful statuses from the one OAuth request that polls** — the
+`device_token` grant, which pairing repeats every ten seconds and which expects them until the user
+confirms on another device. The other OAuth grants are deliberately not exempt: `device_code` starts
+pairing and `refresh_token` renews a session, both single requests that expect to succeed, and a
+broken refresh logs the viewer out. Hiding those would suppress the failure most worth hearing
+about. Transport failures are reported on every request, polling included — an unreachable endpoint
+is a fault whoever it belongs to.
 
 What reaches Sentry is the normalised path, method and status: query strings are stripped, since
 every authenticated request carries `access_token` there, and numeric path segments become `{id}`,
