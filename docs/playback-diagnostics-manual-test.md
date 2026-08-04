@@ -84,6 +84,17 @@ Use this checklist on an LG webOS TV after installing a build that includes the 
 - If supported, confirm total frames, dropped frames, and dropped percentage update.
 - If unsupported on the TV firmware, confirm the overlay shows `not available`.
 
+## Fragment Labelling
+
+- Play a stream with a separate audio track at a quality that is not 1080p (2160p is a good test).
+- Confirm `Last Fragment` shows one line per stream — `main: 2160p, …` and `audio: track N, …` —
+  and that neither flickers between resolutions.
+- Confirm the audio line is never labelled with a video resolution. An audio fragment's `level` is a
+  track index, so resolving it against the video levels would name it after an unrelated quality.
+- Sanity-check the sizes: a 2160p video fragment is megabytes, an audio fragment a few hundred KB.
+- Confirm `main last successful` tracks the video stream, so it keeps climbing if video stalls while
+  audio keeps arriving.
+
 ## Overlay Layout
 
 - Open the overlay during normal playback.

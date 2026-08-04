@@ -158,6 +158,19 @@ Subscribe to HLS events when available:
 - `LEVEL_SWITCHED`;
 - `ERROR`.
 
+`frag.level` indexes whichever playlist set produced the fragment, and that is **not** always
+`hls.levels`. `audio-stream-controller.ts` builds its own `levels` from the audio track list, so an
+audio fragment's `level` is a track index. Resolving it against the video levels names audio
+fragments after video resolutions — an audio track at index 2 reads as `1080p` purely because video
+level 2 happens to be 1080p. Only resolve a level against `hls.levels` when `frag.type === 'main'`;
+label anything else as a track.
+
+Keep the last fragment per stream rather than one shared slot. Video and audio fragments interleave,
+and audio buffers a moment after the video fragment it accompanies, so a single slot shows the audio
+one almost all of the time. `last successful` is deliberately the **main** stream's age: audio
+continuing to buffer while video is stuck is exactly the situation the panel must expose rather than
+hide behind a healthy-looking number.
+
 For the most recently completed media fragment, show:
 
 - selected level or height;
