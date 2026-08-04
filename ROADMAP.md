@@ -494,6 +494,26 @@ Ordered by priority, then by what unblocks what.
   (`media.new.tsx:64-66`) carry no derivation. The tag is set at `logging.ts:177-179`. `ROADMAP.md`
   item 1 records two different segments (`sn 57`, `sn 46`) failing on the same title and host while
   the opening of the file buffered normally.
+
+  **First real data, from a Sentry episode captured on the TV
+  ([#18](https://github.com/kaaburgh/kinopub.webos/issues/18)).** Two things it settles and one it
+  does not:
+
+  - _The failure is edge-specific, not only segment-specific._ Every request to
+    `…ams-static-01.cdntogo.net` for that asset returned `0` or `502` across two minutes, while
+    every request to `…ams-static-03.cdntogo.net` returned `200` — including the playlist retries
+    that hls.js made after each failure. So a working edge was reachable throughout. The playlist
+    reload does move to `-03`, but the segment URLs it returns still point at `-01`, which is why
+    retrying changes nothing. Whether the app can influence that is the open question; it may be a
+    CDN-side problem no client can route around.
+  - _The watchdog escalation ran and did not rescue playback._ `watchdog-restart` at 136 s, then
+    `watchdog-reload`, and the reload immediately provoked a fatal audio-track error. The episode
+    closed as `recovered … via media-recover`, but that "recovery" was `recoverMediaError()`
+    restarting the film from the beginning — so the success metric counted a destructive restart as
+    a success. Treat `playback_recovered_after` totals with that in mind until more episodes exist.
+  - _Still unanswered:_ why the object is missing from that edge in the first place, and whether the
+    sequential-play experiment below reproduces it.
+
 - **Motivation and expected benefit:** Either the reload works, in which case the numbers can be
   tuned with evidence and the fatal-retry budget could arguably escalate to it sooner; or it does
   not, in which case a third of the recovery machinery is ceremony and should be cut.
@@ -719,6 +739,55 @@ Ordered by priority, then by what unblocks what.
   end state — budget exhausted, notice shown, episode reported — reproducibly, from a documented
   command. A scenario that only works sometimes is not finished.
 - **Estimated scope:** Medium. Small per scenario once the harness and the Sentry gate exist.
+
+### A20 — Media recovery is a blunt instrument for the errors it is used on
+
+- **Status:** Partially implemented — investigation continues
+- **Priority:** Medium
+- **Category:** Playback recovery
+- **Origin:** [#18](https://github.com/kaaburgh/kinopub.webos/issues/18), while fixing what it
+  reported
+
+> **One case answered.** `audioTrackLoadError` no longer goes to `recoverMediaError()` on its first
+> occurrence: hls.js raises it from `selectInitialTrack()` when a rebuilt audio group has no track
+> matching the selected name, which is a selection problem rather than a decode one, and which the
+> stall watchdog's own playlist reload provokes. It is now re-selected in place, with the media path
+> kept as the fallback on a repeat. The general question — which recoveries suit which error details
+> — still wants episode data across more failures.
+
+- **Problem or opportunity:** Every fatal `mediaError` goes through `recoverMediaError()`, which
+  detaches and re-attaches the media element. That is a very large hammer, and the two symptoms
+  reported in #18 — playback restarting from the beginning, and the audio track reverting — were
+  both consequences of the hammer rather than of the original fault. Those are fixed by preserving
+  position and re-applying the selection, but the underlying question is untouched: is a full
+  detach/attach the right response to, say, an audio-track playlist that failed to load?
+- **Concrete evidence:** The capture in #18 recorded
+  `recovery: reason=mediaError / audioTrackLoadError`. hls.js's buffer controller does
+  `media.removeAttribute('src'); media.load()` on detach
+  (`node_modules/hls.js/dist/hls.js:4319-4325`), which resets `currentTime` and drops every buffered
+  range; on re-attach the stream controller resumes from `config.startPosition` (`:3042-3044`). The
+  same capture showed the CDN refusing one specific segment (`sn 14`, `HTTP 0` then `HTTP 502`) for
+  minutes on end, so the audio-track failure may well be the same edge problem wearing a different
+  hat.
+- **Motivation and expected benefit:** A cheaper recovery for playlist-level failures would avoid
+  rebuilding the pipeline at all, and rebuilding it is exactly what produced two viewer-visible
+  regressions. Fewer sledgehammers, fewer things to put back afterwards.
+- **Proposed direction:** Learn first. `playback_recovered_after` and the episode breadcrumbs now
+  record which recovery ran and whether it worked; group by `playback_reason` to see which error
+  details actually reach the media path and how often each recovery succeeds. Only then consider
+  splitting the response — for instance retrying an audio-track playlist directly, and reserving
+  `recoverMediaError()` for genuine decode failures.
+- **Dependencies and sequencing:** Needs episode data, so it follows the same device session as
+  **A5** and **A6**. Nothing to build until then.
+- **Compatibility risks:** Changing which recovery runs for which error is the riskiest edit in this
+  area, and it has already produced two regressions when done implicitly. It should not be done on a
+  hunch.
+- **Confidence:** runtime — high on the mechanism, read from the pinned hls.js. `assumed` on whether
+  a narrower recovery would work at all.
+- **Validation and acceptance criteria:** A recorded breakdown of media-path errors by `details`
+  and outcome, then a decision written down either way — including "leave it alone", which is a
+  legitimate result.
+- **Estimated scope:** Small to investigate; unknown to change.
 
 ### A19 — Move the Sentry DSN out of the source and rotate it
 

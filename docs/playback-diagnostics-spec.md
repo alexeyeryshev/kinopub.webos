@@ -139,6 +139,14 @@ When HLS.js is active, show:
 
 Read all HLS fields defensively because not every field is guaranteed in the installed `hls.js` version.
 
+Show the audio selection twice: what the player believes is selected, and the track hls.js is
+actually playing, adjacent and highlighted when they disagree. They are separate facts and they do
+come apart — `recoverMediaError()` re-attaches the media element without reloading the manifest, so
+neither the `MANIFEST_PARSED` restore nor the effect keyed on `isLoaded` re-applies the choice, and
+playback resumes in a different language from the one the settings menu still displays. A capture
+that carried only one of the two could not show that, which is why the first report of it arrived
+with no evidence attached.
+
 Derive the Auto/Fixed label from `hls.autoLevelEnabled` (falling back to `hls.currentLevel === -1` only if that
 field is missing), not from the number of available levels. A stream can expose multiple levels while a level
 was pinned manually, and a stream can expose a single level while still reporting automatic mode; the level
@@ -181,6 +189,17 @@ For the most recently completed media fragment, show:
 
 Use HLS loader stats defensively and avoid division by zero. `FragLoadedData` and the buffer-append events do
 not carry top-level `stats`; read them from `frag.stats` instead, since `Fragment.stats` is always populated.
+
+Load timing lives in `stats.loading.start` / `stats.loading.end` in the pinned hls.js. The overlay
+originally read `trequest` / `tload`, which are the hls.js 0.x names, so every load duration and
+every throughput derived from one read `n/a` — in every device capture taken, without anybody
+noticing that a permanently absent number is different from a slow one. The 0.x names are still
+accepted as a fallback.
+
+Name a level by the quality it represents, not by the height it advertises, everywhere a level
+appears. A letterboxed encode reports `720x302` for what the level list already calls `405p`, and
+using the raw height in the fragment and pipeline lines made one level read as two different
+qualities on the same screen.
 
 Track the fragment-load and buffer-append lifecycle as two separate pending/completed stages (`Segment Pipeline`) so a stall can be attributed to either phase:
 
@@ -379,6 +398,23 @@ disagree.
   discarded rather than compared across two unrelated runs.
 
 The rule lives in `src/utils/decodeHealth.ts` with unit tests.
+
+### Audio-track selection errors are not decode failures
+
+hls.js types `audioTrackLoadError` as a **media** error, but one of the two places it is raised has
+nothing to do with decoding: `audio-track-controller`'s `selectInitialTrack()` triggers
+`{ type: MEDIA_ERROR, details: AUDIO_TRACK_LOAD_ERROR, fatal: true }` when an audio group has just
+been rebuilt and no track in it matches the selected name. Sending that down `recoverMediaError()`
+rebuilds the media element — losing the position, the buffer and the selection — to fix a problem
+that is only "re-apply the audio track".
+
+The stall watchdog provokes exactly this: its playlist reload rebuilds the audio group. A Sentry
+episode from the TV recorded `watchdog-reload`, then this error 54 ms later, then a
+`recoverMediaError()` that restarted a fifty-minute film from the beginning with the wrong audio.
+
+So the first occurrence re-selects the track and restarts loading from the current position, and
+only a repeat falls through to the media-recovery path. The other site that raises the same detail —
+the playlist loader, on a genuine network failure — types it as `NETWORK_ERROR` and is unaffected.
 
 ## Playback Failure Notice
 

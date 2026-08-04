@@ -34,6 +34,10 @@ type DiagnosticsTarget = {
   video: Nullable<HTMLVideoElement>;
   hls: Nullable<HLS>;
   selectedQuality: Nullable<string>;
+  /** What the player believes is selected, which is not always what hls.js is playing. */
+  selectedAudio: Nullable<string>;
+  /** Its position in the player's own track list, so it can be compared with hls.js directly. */
+  selectedAudioIndex: Nullable<number>;
 };
 
 type DiagnosticHistoryItem = {
@@ -118,6 +122,11 @@ type PlaybackSnapshot = {
     autoLevelCapping?: number;
     bandwidthEstimate?: number;
     mode: string;
+    /** What hls.js is actually playing. Diverging from the player's selection is a real defect. */
+    audioTrackId?: number;
+    audioTrackIndex?: number;
+    audioTrackCount: number;
+    audioTrackName?: string;
   };
 };
 
@@ -352,10 +361,18 @@ function getHlsSnapshot(hls: Nullable<HLS>) {
       levelCount: 0,
       levels: [],
       mode: 'n/a',
+      audioTrackCount: 0,
     };
   }
 
   const levels = Array.isArray(hls.levels) ? hls.levels : [];
+  const audioTracks: any[] = Array.isArray(hls.audioTracks) ? hls.audioTracks : [];
+  // `hls.audioTrack` is a track *id*. It usually equals the position in the list, but nothing
+  // guarantees that, and the player selects by id — so resolve by id and report the position, which
+  // is what can be compared against the player's own selection.
+  const audioTrackId = getHlsNumber(hls, 'audioTrack');
+  const audioTrackIndex = audioTrackId === undefined ? -1 : audioTracks.findIndex((track) => track.id === audioTrackId);
+  const currentAudioTrack = audioTrackIndex === -1 ? undefined : audioTracks[audioTrackIndex];
 
   return {
     active: true,
@@ -367,7 +384,24 @@ function getHlsSnapshot(hls: Nullable<HLS>) {
     autoLevelCapping: getHlsNumber(hls, 'autoLevelCapping'),
     bandwidthEstimate: getHlsNumber(hls, 'bandwidthEstimate'),
     mode: getHlsMode(hls),
+    audioTrackId,
+    audioTrackIndex: audioTrackIndex === -1 ? undefined : audioTrackIndex,
+    audioTrackCount: audioTracks.length,
+    audioTrackName: currentAudioTrack ? [currentAudioTrack.name, currentAudioTrack.lang].filter(Boolean).join(' ') : undefined,
   };
+}
+
+/** `track 2 (Дубляж rus) of 6`, or what is known of it. */
+function formatAudioTrack(hlsSnapshot: PlaybackSnapshot['hls']) {
+  if (!hlsSnapshot.audioTrackCount) {
+    return 'n/a';
+  }
+
+  const position =
+    hlsSnapshot.audioTrackIndex === undefined ? `id ${hlsSnapshot.audioTrackId ?? '?'}` : `track ${hlsSnapshot.audioTrackIndex}`;
+  const name = hlsSnapshot.audioTrackName ? ` (${hlsSnapshot.audioTrackName})` : '';
+
+  return `${position}${name} of ${hlsSnapshot.audioTrackCount}`;
 }
 
 function takeSnapshot(video: Nullable<HTMLVideoElement>, hls: Nullable<HLS>): Nullable<PlaybackSnapshot> {
@@ -399,6 +433,22 @@ function takeSnapshot(video: Nullable<HTMLVideoElement>, hls: Nullable<HLS>): Nu
   };
 }
 
+/**
+ * How long a fragment took to load, from hls.js loader stats.
+ *
+ * The pinned hls.js reports this as `stats.loading.start/end`. The overlay was reading `trequest`
+ * and `tload`, which are the names hls.js 0.x used, so every load duration and every derived
+ * throughput has read `n/a` since the diagnostics were written — visible in every device capture
+ * taken so far, and easy to mistake for the stream being idle. The old names are still accepted in
+ * case a build ever runs against an older runtime.
+ */
+function getLoadSeconds(stats: any) {
+  const start = getFiniteNumber(stats?.loading?.start) ?? getFiniteNumber(stats?.trequest);
+  const end = getFiniteNumber(stats?.loading?.end) ?? getFiniteNumber(stats?.tload);
+
+  return start !== undefined && end !== undefined && end > start ? (end - start) / 1000 : undefined;
+}
+
 function getFragmentInfo(data: any, hls: HLS): LastFragmentInfo {
   const frag = data?.frag || {};
   // FRAG_BUFFERED carries top-level stats; FRAG_LOADED and buffer-append events only expose them on the fragment itself.
@@ -411,16 +461,16 @@ function getFragmentInfo(data: any, hls: HLS): LastFragmentInfo {
   // an audio track at index 2 reads as "1080p" purely because video level 2 happens to be 1080p.
   const levelInfo = streamType === 'main' && level !== undefined ? hls.levels?.[level] : undefined;
   const bytes = getFiniteNumber(stats.loaded) ?? getFiniteNumber(stats.total);
-  const requestTime = getFiniteNumber(stats.trequest);
-  const loadTime = getFiniteNumber(stats.tload);
-  const loadSeconds =
-    requestTime !== undefined && loadTime !== undefined && loadTime > requestTime ? (loadTime - requestTime) / 1000 : undefined;
+  const loadSeconds = getLoadSeconds(stats);
 
   return {
     timestamp: Date.now(),
     streamType,
     level,
-    height: streamType === 'main' ? getFiniteNumber(levelInfo?.height) ?? getFiniteNumber(frag.height) : undefined,
+    // The quality this level represents, not the height it advertises. A letterboxed encode reports
+    // 720x302 for what the manifest list already calls 405p, and showing 302p here made the same
+    // level read as two different qualities on one screen.
+    height: streamType === 'main' ? getLevelQualityHeight(levelInfo || {}) || getFiniteNumber(frag.height) : undefined,
     bytes,
     loadSeconds,
     throughputMbps: bytes !== undefined && loadSeconds && loadSeconds > 0 ? (bytes * 8) / loadSeconds / 1000 / 1000 : undefined,
@@ -431,7 +481,8 @@ function formatFragmentIdentity(frag: any, hls: HLS) {
   const streamType = typeof frag?.type === 'string' ? frag.type : 'main';
   const level = getFiniteNumber(frag?.level);
   // Same trap as in `getFragmentInfo`: only a main fragment's level indexes `hls.levels`.
-  const height = streamType === 'main' && level !== undefined ? getFiniteNumber(hls.levels?.[level]?.height) : undefined;
+  // Normalised, so a level is named the same way here as it is in the level list above.
+  const height = streamType === 'main' && level !== undefined ? getLevelQualityHeight(hls.levels?.[level] || {}) : undefined;
   const quality = height
     ? `${height}p`
     : level !== undefined
@@ -555,7 +606,7 @@ function getHlsEventDetails(name: string, data: any, hls: HLS) {
 
   if (name === 'LEVEL_SWITCHED') {
     const level = getFiniteNumber(data?.level);
-    const height = level !== undefined ? getFiniteNumber(hls.levels?.[level]?.height) : undefined;
+    const height = level !== undefined ? getLevelQualityHeight(hls.levels?.[level] || {}) : undefined;
 
     return ['level switch', level !== undefined ? `level ${level}` : undefined, height ? `${height}p` : undefined]
       .filter(Boolean)
@@ -586,7 +637,13 @@ function getHlsEventDetails(name: string, data: any, hls: HLS) {
 }
 
 function PlaybackDiagnosticsOverlay({ visible, exportVisible, onExportToggle, player }: Props) {
-  const [target, setTarget] = useState<DiagnosticsTarget>({ video: null, hls: null, selectedQuality: null });
+  const [target, setTarget] = useState<DiagnosticsTarget>({
+    video: null,
+    hls: null,
+    selectedQuality: null,
+    selectedAudio: null,
+    selectedAudioIndex: null,
+  });
   const [snapshot, setSnapshot] = useState<Nullable<PlaybackSnapshot>>(null);
   const [history, setHistory] = useState<DiagnosticHistoryItem[]>([]);
   const [lastFragments, setLastFragments] = useState<LastFragmentsByStream>({});
@@ -625,10 +682,16 @@ function PlaybackDiagnosticsOverlay({ visible, exportVisible, onExportToggle, pl
         video: media?.videoElement || null,
         hls: media?.hls || null,
         selectedQuality: media?.sourceTrack || null,
+        selectedAudio: media?.audioTrack || null,
+        selectedAudioIndex: media?.audioTrackIndex ?? null,
       };
 
       setTarget((current) =>
-        current.video === nextTarget.video && current.hls === nextTarget.hls && current.selectedQuality === nextTarget.selectedQuality
+        current.video === nextTarget.video &&
+        current.hls === nextTarget.hls &&
+        current.selectedQuality === nextTarget.selectedQuality &&
+        current.selectedAudio === nextTarget.selectedAudio &&
+        current.selectedAudioIndex === nextTarget.selectedAudioIndex
           ? current
           : nextTarget,
       );
@@ -698,7 +761,7 @@ function PlaybackDiagnosticsOverlay({ visible, exportVisible, onExportToggle, pl
             [streamType]: {
               status: 'loading',
               level,
-              height: streamType === 'main' && level !== undefined ? getFiniteNumber(hls.levels?.[level]?.height) : undefined,
+              height: streamType === 'main' && level !== undefined ? getLevelQualityHeight(hls.levels?.[level] || {}) : undefined,
               sn: frag?.sn,
               startedAt: Date.now(),
             },
@@ -807,6 +870,14 @@ function PlaybackDiagnosticsOverlay({ visible, exportVisible, onExportToggle, pl
     };
   }, [visible, target, readMediaRef]);
 
+  // The player's selection and what hls.js is playing should agree. They stop agreeing when a
+  // recovery re-attaches the media element without re-applying the selection, which is a defect a
+  // viewer notices as the film changing language while the settings menu still says otherwise.
+  const isAudioSelectionMismatched =
+    target.selectedAudioIndex !== null &&
+    snapshot?.hls.audioTrackIndex !== undefined &&
+    target.selectedAudioIndex !== snapshot.hls.audioTrackIndex;
+
   // Deliberately the main stream: audio continuing to buffer while video is stuck is exactly the
   // situation this panel needs to make visible rather than hide behind a healthy-looking number.
   const lastMainFragment = lastFragments.main;
@@ -862,6 +933,15 @@ function PlaybackDiagnosticsOverlay({ visible, exportVisible, onExportToggle, pl
         bandwidthEstimate: hlsState.bandwidthEstimate,
         levels: hlsState.levels,
       },
+      audio: hlsState.audioTrackCount
+        ? {
+            selectedName: target.selectedAudio ?? undefined,
+            selectedIndex: target.selectedAudioIndex ?? undefined,
+            playingIndex: hlsState.audioTrackIndex,
+            playingName: hlsState.audioTrackName,
+            trackCount: hlsState.audioTrackCount,
+          }
+        : undefined,
       lastFragment: lastMainFragment
         ? {
             level: lastMainFragment.level,
@@ -1070,6 +1150,11 @@ function PlaybackDiagnosticsOverlay({ visible, exportVisible, onExportToggle, pl
               <div>loadLevel: {snapshot.hls.loadLevel ?? 'n/a'}</div>
               <div>autoLevelCapping: {snapshot.hls.autoLevelCapping ?? 'n/a'}</div>
               <div>bandwidthEstimate: {formatBitrate(snapshot.hls.bandwidthEstimate)}</div>
+              {/* The two audio lines are deliberately adjacent: a recovery that re-attaches the
+                  media element can leave hls.js on a different track from the one the player still
+                  believes is selected, and that mismatch is invisible unless both are on screen. */}
+              <div className={cx({ 'text-yellow-300': isAudioSelectionMismatched })}>selected audio: {target.selectedAudio ?? 'n/a'}</div>
+              <div className={cx({ 'text-yellow-300': isAudioSelectionMismatched })}>playing audio: {formatAudioTrack(snapshot.hls)}</div>
               <div>available: {snapshot.hls.levels.join(', ') || 'n/a'}</div>
             </section>
 
