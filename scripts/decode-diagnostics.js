@@ -177,6 +177,8 @@ function parseCompactText(text) {
         autoLevelCapping: optional(parts[8]),
         bandwidthEstimateBps: optional(parts[9]),
       };
+    } else if (tag === 'd') {
+      report.dynamicRange = { videoRange: optional(parts[1]), displayRange: optional(parts[2]) };
     } else if (tag === 'a') {
       report.audio = {
         selectedName: optional(parts[1]),
@@ -270,6 +272,10 @@ function formatReport(report) {
 
   if (report.levels) {
     lines.push(`levels:   ${report.levels}`);
+  }
+
+  if (report.dynamicRange) {
+    lines.push(`range:    video=${report.dynamicRange.videoRange || 'not declared'} display=${report.dynamicRange.displayRange || 'n/a'}`);
   }
 
   if (report.audio) {

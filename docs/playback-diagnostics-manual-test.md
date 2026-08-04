@@ -117,6 +117,23 @@ Use this checklist on an LG webOS TV after installing a build that includes the 
   than a `media-recover`, and that playback continues from where it was. A `media-recover`
   immediately after `watchdog-reload` is the shape this guards against.
 
+## Subtitle Brightness And HDR
+
+- Play an HDR title with subtitles and open the player settings.
+- Confirm `Яркость субтитров` now offers 15% and 10% below 25%. On the TV, 25% was both the dimmest
+  option and the one chosen as best for HDR, which is the shape of a range that stops too early.
+- Pick a value, leave the player, and come back to the same title. The value must be remembered.
+- Open a different title and confirm it starts from the value last chosen, then set its own. Going
+  back to the first title must restore the first value: brightness is remembered per title because
+  HDR and SDR want very different numbers and nothing in the app reliably says which is playing.
+- For a series, confirm episodes of the same series share one value.
+- In the `HLS` section, note what `video range` and `display` report. `video range` is read from the
+  manifest's `VIDEO-RANGE` attribute and is expected to say `not declared` — if it ever says `PQ` or
+  `HLG` on HDR content, automatic brightness selection becomes possible and is worth reporting.
+  `display` reports whether the panel can show HDR, which is not the same question.
+- Confirm the diagnostics panel text is a shade less blinding than before in HDR mode. It is grey
+  rather than pure white now, since pure white is what an HDR display maps to peak brightness.
+
 ## Overlay Layout
 
 - Open the overlay during normal playback.

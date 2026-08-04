@@ -70,7 +70,28 @@ const Player: React.FC<PlayerProps> = ({
   const [failure, setFailure] = useState<PlaybackFailure>();
   const [controlsVisible, setControlsVisible] = useState(true);
   const [isPauseByOKClickActive] = useStorageState<boolean>('is_pause_by_ok_click_active');
-  const [subtitleOpacity] = useStorageState<number>('subtitle_opacity', 1);
+  // Subtitle brightness is remembered per title as well as globally. The right value is not one
+  // number: on the TV an HDR title wanted 25% while SDR sat around 50-75%, and nothing available to
+  // the app reliably says which is playing (see `utils/hdr`). Per-title memory sidesteps the
+  // question -- a film, or a series, keeps whatever was chosen for it -- while the global value
+  // seeds anything not seen before.
+  const [globalSubtitleOpacity, setGlobalSubtitleOpacity] = useStorageState<number>('subtitle_opacity', 1);
+  const subtitleOpacityKey = `item_${item?.id ?? 'default'}_saved_subtitle_opacity` as const;
+  const [itemSubtitleOpacity, setItemSubtitleOpacity] = useStorageState<number>(subtitleOpacityKey, globalSubtitleOpacity);
+  const subtitleOpacity = item ? itemSubtitleOpacity : globalSubtitleOpacity;
+
+  const handleSubtitleOpacityChange = useCallback(
+    (opacity: number) => {
+      // Both: this title keeps the choice, and the next unseen one starts from it rather than from
+      // whatever was set months ago.
+      setGlobalSubtitleOpacity(opacity);
+
+      if (item) {
+        setItemSubtitleOpacity(opacity);
+      }
+    },
+    [item, setGlobalSubtitleOpacity, setItemSubtitleOpacity],
+  );
   const [currentSourceName, setCurrentSourceName] = useState<string | null>(null);
 
   const isAutoQuality = currentSourceName === AUTO_SOURCE_NAME;
@@ -262,6 +283,8 @@ const Player: React.FC<PlayerProps> = ({
       <Settings
         visible={isSettingsOpen}
         diagnosticsVisible={isDiagnosticsVisible}
+        subtitleOpacity={subtitleOpacity ?? 1}
+        onSubtitleOpacityChange={handleSubtitleOpacityChange}
         onClose={handleSettingsClose}
         onDiagnosticsToggle={handleDiagnosticsToggle}
         player={playerRef}

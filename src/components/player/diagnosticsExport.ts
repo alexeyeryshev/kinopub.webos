@@ -91,6 +91,9 @@ export type ExportCapture = {
     autoLevelCapping?: number;
     bandwidthEstimate?: number;
     levels: string[];
+    /** `VIDEO-RANGE` of the played level, and whether the display can show HDR. */
+    videoRange?: string;
+    displayRange?: string;
   };
   /**
    * Audio selection, as both sides see it. The player's choice and the track hls.js is actually
@@ -196,6 +199,7 @@ export function buildCompactText(capture: ExportCapture) {
       )}|${num(h.autoLevelCapping)}|${num(h.bandwidthEstimate)}`,
     );
     lines.push(`l|${h.levels.map(clean).join(';')}`);
+    lines.push(`d|${clean(h.videoRange)}|${clean(h.displayRange)}`);
   }
 
   // A separate line rather than more fields on `h|`: the decoder skips tags it does not know, so an

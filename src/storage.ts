@@ -15,7 +15,8 @@ export type Key =
   | 'subtitle_opacity'
   | `item_${string}_saved_audio_name`
   | `item_${string}_saved_source_name`
-  | `item_${string}_saved_subtitle_name`;
+  | `item_${string}_saved_subtitle_name`
+  | `item_${string}_saved_subtitle_opacity`;
 
 function getItem(storage: Storage, prefix: string, key: string) {
   const data = JSON.parse(storage.getItem(prefix) || '{}') || {};

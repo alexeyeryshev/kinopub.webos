@@ -6,28 +6,43 @@ import Button from 'components/button';
 import { AudioTrack, SourceTrack, SubtitleTrack } from 'components/media';
 import Popup from 'components/popup';
 import Select from 'components/select';
-import useStorageState from 'hooks/useStorageState';
 
 import { getVideoNode } from './getVideoNode';
 
 const NONE = 'NONE';
 
+// Reaches lower than it used to. On the TV, 25% was both the dimmest option offered and the one
+// chosen as best for an HDR title, which is the shape of a range that stops too early -- the
+// preferred value may well be below the floor. SDR sat around 50-75%, so the top of the range is
+// still where it needs to be.
 const SUBTITLE_OPACITY_OPTIONS = [
   { title: '100%', value: 1 },
   { title: '75%', value: 0.75 },
   { title: '50%', value: 0.5 },
   { title: '25%', value: 0.25 },
+  { title: '15%', value: 0.15 },
+  { title: '10%', value: 0.1 },
 ];
 
 type Props = {
   visible: boolean;
   diagnosticsVisible: boolean;
+  subtitleOpacity: number;
+  onSubtitleOpacityChange: (opacity: number) => void;
   onClose: () => void;
   onDiagnosticsToggle: () => void;
   player: React.MutableRefObject<VideoPlayerBase | undefined>;
 };
 
-const Settings: React.FC<Props> = ({ visible, diagnosticsVisible, onClose, onDiagnosticsToggle, player }) => {
+const Settings: React.FC<Props> = ({
+  visible,
+  diagnosticsVisible,
+  subtitleOpacity,
+  onSubtitleOpacityChange,
+  onClose,
+  onDiagnosticsToggle,
+  player,
+}) => {
   const [isOpen, setIsOpen] = useState(visible);
   const [audios, setAudios] = useState<AudioTrack[]>([]);
   const [currentAudio, setCurrentAudio] = useState<string | null>(null);
@@ -35,7 +50,6 @@ const Settings: React.FC<Props> = ({ visible, diagnosticsVisible, onClose, onDia
   const [currentSource, setCurrentSource] = useState<string | null>(null);
   const [subtitles, setSubtitles] = useState<SubtitleTrack[]>([]);
   const [currentSubtitle, setCurrentSubtitle] = useState<string | null>(NONE);
-  const [subtitleOpacity, setSubtitleOpacity] = useStorageState<number>('subtitle_opacity', 1);
 
   const audioOptions = useMemo(() => map(audios, (audio) => ({ title: `${audio.number} ${audio.name}`, value: audio.name })), [audios]);
   const sourceOptions = useMemo(() => map(sources, (source) => ({ title: source.name, value: source.name })), [sources]);
@@ -83,9 +97,9 @@ const Settings: React.FC<Props> = ({ visible, diagnosticsVisible, onClose, onDia
   );
   const handleSubtitleOpacityChange = useCallback(
     (opacity: number) => {
-      setSubtitleOpacity(opacity);
+      onSubtitleOpacityChange(opacity);
     },
-    [setSubtitleOpacity],
+    [onSubtitleOpacityChange],
   );
 
   const handleClose = useCallback(() => {
