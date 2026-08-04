@@ -486,6 +486,29 @@ would tell the same story twice and spend twice the quota. The stream context th
 The state machine is in `src/utils/playbackEpisode.ts` with unit tests; `sentryEpisodeSink` in
 `src/utils/logging.ts` is the only part that touches Sentry.
 
+### What leaves the TV, and where it goes
+
+Sentry is the only telemetry destination. That is a deliberate narrowing, not an accident of what
+happened to be wired up.
+
+An inherited Google Analytics tag (`G-2QFN9YLY57`, upstream's property) used to load
+`googletagmanager.com` on every app start and forward Web Vitals to it. It was removed along with
+`utils/analytics.ts`, `reportWebVitals.ts` and the `web-vitals` dependency, for three reasons:
+
+- the data went to a third party and was invisible to whoever debugs this fork — the same argument
+  that motivated replacing the inherited Sentry DSN, which had been applied to one channel and not
+  the other;
+- it was duplicative. `@sentry/tracing`'s `BrowserTracing` integration already records CLS, LCP,
+  FID, FCP and TTFB as measurements on the pageload transaction, which is the same five metrics the
+  GA callback forwarded;
+- on the TV it collected almost nothing anyway. The app is not served over http there — that is
+  what makes `IS_WEB` false and selects `MemoryRouter` — so navigation never changes the URL and no
+  page view after the first is ever recorded, while the tag still costs a third-party request at
+  startup.
+
+If product analytics are wanted later, add a property this fork owns and wire it deliberately.
+Nothing in the app depends on the removed code.
+
 Two rules keep this useful:
 
 - **One report per issue per playback session.** The failure this project has been chasing produces
