@@ -112,6 +112,10 @@ Use this checklist on an LG webOS TV after installing a build that includes the 
   drops the buffer.
 - Confirm the audio track is still the selected one, in the picture and in both diagnostics lines.
   If they disagree the two lines turn yellow, and a capture taken then carries the same mismatch.
+- Let a stall run long enough for the watchdog to reload the playlist. If an `audioTrackLoadError`
+  follows it, confirm the recovery is now an `audio-track-reselect` in the Sentry breadcrumbs rather
+  than a `media-recover`, and that playback continues from where it was. A `media-recover`
+  immediately after `watchdog-reload` is the shape this guards against.
 
 ## Overlay Layout
 

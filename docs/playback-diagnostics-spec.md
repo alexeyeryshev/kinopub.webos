@@ -399,6 +399,23 @@ disagree.
 
 The rule lives in `src/utils/decodeHealth.ts` with unit tests.
 
+### Audio-track selection errors are not decode failures
+
+hls.js types `audioTrackLoadError` as a **media** error, but one of the two places it is raised has
+nothing to do with decoding: `audio-track-controller`'s `selectInitialTrack()` triggers
+`{ type: MEDIA_ERROR, details: AUDIO_TRACK_LOAD_ERROR, fatal: true }` when an audio group has just
+been rebuilt and no track in it matches the selected name. Sending that down `recoverMediaError()`
+rebuilds the media element — losing the position, the buffer and the selection — to fix a problem
+that is only "re-apply the audio track".
+
+The stall watchdog provokes exactly this: its playlist reload rebuilds the audio group. A Sentry
+episode from the TV recorded `watchdog-reload`, then this error 54 ms later, then a
+`recoverMediaError()` that restarted a fifty-minute film from the beginning with the wrong audio.
+
+So the first occurrence re-selects the track and restarts loading from the current position, and
+only a repeat falls through to the media-recovery path. The other site that raises the same detail —
+the playlist loader, on a genuine network failure — types it as `NETWORK_ERROR` and is unaffected.
+
 ## Playback Failure Notice
 
 The recovery budgets exist so a refusing CDN is not hammered indefinitely. Draining them turned an

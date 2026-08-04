@@ -422,6 +422,8 @@ function useVideoPlayer({
   useEffect(() => {
     let recoveryTimeoutId: NodeJS.Timeout | undefined;
     let mediaRecoveryAttempts = 0;
+    // Guards the audio-track re-selection below to one attempt per healthy stretch of playback.
+    let audioTrackReselected = false;
     let recoveringStream: string | undefined;
 
     if (videoRef.current && currentSrc) {
@@ -472,6 +474,7 @@ function useVideoPlayer({
 
           recoveringStream = undefined;
           mediaRecoveryAttempts = 0;
+          audioTrackReselected = false;
 
           if (fatalRecoveryRef.current.attempts > 0 || fatalRecoveryRef.current.exhausted) {
             fatalRecoveryRef.current = { ...fatalRecoveryRef.current, attempts: 0, exhausted: false };
@@ -552,6 +555,42 @@ function useVideoPlayer({
           }
 
           if (data.type === HLS.ErrorTypes.MEDIA_ERROR) {
+            // `audioTrackLoadError` arrives typed as a *media* error but is not a decode failure at
+            // all. hls.js raises this one from `selectInitialTrack()` when an audio group has just
+            // been rebuilt and no track in it matches the name that was selected — see
+            // `audio-track-controller` in the pinned build, which triggers
+            // `{ type: MEDIA_ERROR, details: AUDIO_TRACK_LOAD_ERROR, fatal: true }` with the log
+            // line "No track found for running audio group-ID". Rebuilding the media element for
+            // that is a sledgehammer, and a Sentry episode from the TV shows what it costs: 54 ms
+            // after the stall watchdog's `hls.loadSource()` this fired, and the `recoverMediaError()`
+            // it triggered restarted a fifty-minute film from the beginning with the wrong audio.
+            //
+            // Re-selecting the track is the proportionate response. Once only: if it recurs the
+            // selection was not the problem and the original path still runs.
+            if (data.details === HLS.ErrorDetails.AUDIO_TRACK_LOAD_ERROR && !audioTrackReselected && hls.audioTracks?.length) {
+              audioTrackReselected = true;
+
+              const reselected = hls.audioTracks[currentAudioTrackIndexRef.current] || hls.audioTracks[0];
+              const position = videoRef.current?.currentTime;
+
+              episodeRef.current.noteAction('audio-track-reselect', Date.now(), {
+                index: currentAudioTrackIndexRef.current,
+                count: hls.audioTracks.length,
+              });
+              fatalRecoveryRef.current = { ...fatalRecoveryRef.current, lastReason: reason, lastAt: Date.now() };
+
+              hls.audioTrack = reselected.id;
+
+              // The fatal error stopped the loading engine, so it needs restarting either way.
+              if (position && position > 0) {
+                hls.startLoad(position);
+              } else {
+                hls.startLoad();
+              }
+
+              return;
+            }
+
             mediaRecoveryAttempts += 1;
 
             if (mediaRecoveryAttempts > RECOVERY_MAX_MEDIA_ATTEMPTS) {
