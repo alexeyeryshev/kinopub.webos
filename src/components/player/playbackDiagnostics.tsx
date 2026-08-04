@@ -11,6 +11,7 @@ import DiagnosticsQr from './diagnosticsQr';
 import { getVideoNode } from './getVideoNode';
 
 import { APP_VERSION } from 'utils/app';
+import { FailureCategory, formatCategoryLabel, getFailureCategory } from 'utils/hlsFailures';
 import { getLevelQualityHeight } from 'utils/hlsLevels';
 
 const HISTORY_LIMIT = 30;
@@ -26,13 +27,6 @@ const HLS_EVENT_KEYS = [
   'LEVEL_SWITCHED',
   'ERROR',
 ];
-
-// hls.js categorizes buffer-starvation symptoms as MEDIA_ERROR because they surface through the
-// media element, so they must be matched by `details` before falling back to `type`.
-// `bufferFullError` is deliberately excluded: it is a SourceBuffer quota-exceeded/append-capacity
-// failure (the buffer is too full to append), the opposite condition from starvation, and falls
-// through to the media/decode-failure category instead.
-const BUFFER_STARVATION_DETAILS = new Set(['bufferStalledError', 'bufferSeekOverHole', 'bufferNudgeOnStall']);
 
 type Nullable<T> = T | null;
 
@@ -63,8 +57,6 @@ type LastFragmentInfo = {
   loadSeconds?: number;
   throughputMbps?: number;
 };
-
-type FailureCategory = 'network' | 'buffer' | 'media' | 'other';
 
 type FailureCounts = Record<FailureCategory, number>;
 
@@ -431,37 +423,6 @@ function formatFragmentIdentity(frag: any, hls: HLS) {
   const sn = frag?.sn;
 
   return sn !== undefined && sn !== null ? `${label}, sn ${sn}` : label;
-}
-
-function getFailureCategory(data: any): FailureCategory {
-  const details = typeof data?.details === 'string' ? data.details : undefined;
-
-  if (details && BUFFER_STARVATION_DETAILS.has(details)) {
-    return 'buffer';
-  }
-
-  if (data?.type === 'networkError') {
-    return 'network';
-  }
-
-  if (data?.type === 'mediaError' || data?.type === 'muxError') {
-    return 'media';
-  }
-
-  return 'other';
-}
-
-function formatCategoryLabel(category: FailureCategory) {
-  switch (category) {
-    case 'network':
-      return 'network failure';
-    case 'buffer':
-      return 'buffer starvation';
-    case 'media':
-      return 'media/decode failure';
-    default:
-      return 'other failure';
-  }
 }
 
 function formatFragLoadStageValue(stage: FragLoadStage) {

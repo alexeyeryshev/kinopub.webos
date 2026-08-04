@@ -132,6 +132,18 @@ Use this checklist on an LG webOS TV after installing a build that includes the 
 - Confirm that once playback genuinely resumes, a later unrelated failure starts again from `1/6`
   rather than inheriting the spent budget.
 
+## Decode Health Indicator
+
+- During clean playback, confirm no badge is shown at the top left.
+- On content that stutters, confirm a badge appears below the title row reading
+  `Пропуск кадров N%`, yellow from 1% and red from 5%.
+- Confirm it disappears again once playback is clean for the length of the window (30 s).
+- Confirm the badge is hidden while the diagnostics overlay or the QR export is open.
+- Confirm it never intercepts the remote: pressing directions/OK must behave exactly as without it.
+- If a decoder error occurs, confirm the badge reads `Ошибки декодера ×N` instead, and that the
+  `media/decode` counter in `Failure Summary` moves by the same amount — the two read the same
+  categorisation and must agree.
+
 ## Privacy Check
 
 - Inspect the overlay during HLS errors.
@@ -139,3 +151,5 @@ Use this checklist on an LG webOS TV after installing a build that includes the 
 - Confirm only hostnames are shown for request diagnostics.
 - Decode an exported capture taken during an error and confirm the same holds in the decoded text —
   the export must never carry more than the overlay displays.
+- Confirm a Sentry event for a playback issue contains hostnames only — no full stream URLs, tokens
+  or query parameters in the message, the `playback` context, or the breadcrumbs.

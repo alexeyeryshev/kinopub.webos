@@ -319,3 +319,74 @@ exception: hostnames only, never full URLs, query parameters, cookies, or tokens
 That equivalence is the rule to hold to when the overlay grows: a panel added to the screen without a
 matching field in the capture makes the export quietly less useful than the screen it came from. The
 recovery state is carried on the `r|` line for this reason.
+
+## Decode Health Indicator
+
+A corner badge that appears when the decoder is visibly struggling, so the condition is legible
+without opening the diagnostics overlay. It sits at the top left, below the player's title row, and
+is hidden while the overlay or the QR export is up — those show the same numbers in full.
+
+It is an indicator only. It never lowers quality, reloads, or otherwise acts on the problem.
+
+### Metric
+
+There is no normative threshold for "the decoder is struggling", but there is a settled _metric_:
+the dropped-frame ratio from `HTMLVideoElement.getVideoPlaybackQuality()`, which the W3C Media
+Playback Quality spec exposes for this purpose and which every player surfaces in its stats panel.
+Two properties matter more than the exact numbers:
+
+- **A ratio, not a raw count.** Five dropped frames a minute is 0.35% at 24 fps and 0.14% at 60 fps
+  — the same count describes very different experiences. Normalising by frames rendered makes the
+  number mean one thing.
+- **A sliding window, not cumulative totals.** Cumulative counters dilute: an hour of clean playback
+  buries a minute of stuttering, so a lifetime ratio stops describing _now_.
+
+The window is 30 s, sampled every 2 s. Thresholds:
+
+| Dropped ratio | Severity         |
+| ------------- | ---------------- |
+| < 1%          | none             |
+| 1% – 5%       | warning (yellow) |
+| >= 5%         | severe (red)     |
+
+Hard decode errors are tracked in the same window and escalate independently — one is a warning,
+three are severe. They are qualitatively worse than a dropped frame: a dropped frame is late, while
+`bufferAppendError` or `fragParsingError` means the decoder rejected the data outright. Non-fatal
+ones matter most, because hls.js absorbs them silently and nothing else reports them. The
+categorisation is shared with the overlay via `src/utils/hlsFailures.ts` so the two can never
+disagree.
+
+### Guards against false positives
+
+- The ratio is ignored until at least 120 frames have been rendered in the window, so a couple of
+  frames lost while the pipeline spins up does not read as a total failure.
+- Sampling pauses while playback is paused, since a paused element renders nothing and would
+  otherwise stretch the window across a gap.
+- A backwards counter delta means the element reloaded and reset its counters, so the window is
+  discarded rather than compared across two unrelated runs.
+
+The rule lives in `src/utils/decodeHealth.ts` with unit tests.
+
+## Error Reporting
+
+Playback failures are reported to Sentry as well as shown on screen. The QR capture remains the
+reliable path for a stall, because the network is exactly what breaks then; Sentry covers the more
+common case of the app or the backend misbehaving while the connection is fine.
+
+Reported conditions, all of them states the player could not resolve on its own:
+
+- `fatal-network-recovery-exhausted`
+- `fatal-media-recovery-exhausted`
+- `fatal-unrecoverable`
+- `stall-watchdog-exhausted`
+- `decode-health-severe`
+
+Two rules keep this useful:
+
+- **One report per issue per playback session.** The failure this project has been chasing produces
+  a few hundred errors a minute; reporting each would bury the signal and burn the quota in one
+  evening. The interesting fact is that a session hit a wall, not how many times it bounced off it.
+  The guard resets when a new source loads.
+- **Hostnames only.** Stream URLs carry access tokens and appear in messages, breadcrumbs and
+  request data alike, so `beforeSend` and `beforeBreadcrumb` reduce every URL in an outgoing event
+  to its hostname — the same rule the overlay follows.
