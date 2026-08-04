@@ -161,13 +161,21 @@ Use this checklist on an LG webOS TV after installing a build that includes the 
   the fatal-error budget, then the watchdog's three playlist reloads.
 - Confirm nothing appears while `recovery:` in `Failure Summary` still shows `retry N/6` or the
   watchdog is still counting: a notice during a recovery that might still work is a bug.
-- Once both budgets read `gave up …`, confirm a centred panel appears reading
+- Reproduce the other shape too — a stall that produces only non-fatal errors, where hls.js never
+  escalates and the watchdog is the only thing recovering. The notice must still appear once the
+  watchdog gives up. This is the failure the watchdog exists for, and a rule that also demanded a
+  spent fatal budget would never show anything here.
+- Once recovery reads `gave up …`, confirm a centred panel appears reading
   `Воспроизведение остановлено`, with the reason underneath and a `Повторить` button.
 - Confirm the button is focused: press OK without moving the pointer and the retry must fire.
 - Confirm the arrow keys and OK behave normally everywhere else — the panel must not swallow presses
   meant for the player.
 - Press `Повторить`. Playback must restart **from where it froze**, not from the beginning, and the
   notice must disappear immediately rather than lingering until the next poll.
+- If the retry cannot succeed either, confirm the notice takes as long to come back as it did the
+  first time — roughly a minute of visible retries in `recovery:`, not a few seconds. Reappearing
+  almost immediately means the rebuilt pipeline inherited the previous attempt's spent watchdog
+  budget instead of getting a fresh one.
 - Open the settings popup, the episode picker, and the diagnostics overlay in turn while the notice
   is up. Each must hide it, and closing them must bring it back.
 - Press Back with the notice on screen and confirm it leaves the player at once.

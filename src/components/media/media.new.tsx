@@ -216,20 +216,31 @@ function useVideoPlayer({
   /**
    * The terminal state, or undefined while there is still something to try.
    *
-   * Both budgets have to be spent, not just one: they recover from different failures and act
-   * independently, so a spent fatal-retry budget while the stall watchdog is still reloading the
-   * playlist is not the end of the road. For a source played without hls.js there is no budget at
-   * all and the element's own error is the whole story.
+   * "Every recovery path is spent" has to mean every path that *applies*, not every path that
+   * exists. The two are not the same, and requiring both budgets would have excluded the failure
+   * this player was built for: a CDN edge refusing specific segments produces only non-fatal errors,
+   * so hls.js never escalates, the fatal budget is never touched, and the stall watchdog is the only
+   * thing recovering. Demanding a spent fatal budget there would leave the viewer on the same silent
+   * frozen frame the notice exists to replace.
+   *
+   * So the watchdog must be spent -- it engages on any stall, whatever caused it -- and the fatal
+   * budget only has to be spent if a fatal error ever engaged it. A fatal retry still in flight
+   * means there is a real chance of resuming, and saying playback has failed over the top of that
+   * would be worse than saying nothing.
+   *
+   * For a source played without hls.js there is no budget at all, and the element's own error is the
+   * whole story.
    */
   const getFailure = useCallback(() => {
     const pending = (() => {
       if (usesHlsRef.current) {
         const fatal = fatalRecoveryRef.current;
         const stall = stallRecoveryRef.current;
+        const fatalEngaged = fatal.attempts > 0 || fatal.exhausted;
 
-        return fatal.exhausted && stall.exhausted
-          ? // Prefer the fatal reason: `networkError / fragLoadError` says what broke, while the
-            // watchdog's `stall / reload` only says how we noticed.
+        return stall.exhausted && (!fatalEngaged || fatal.exhausted)
+          ? // Prefer the fatal reason when there is one: `networkError / fragLoadError` says what
+            // broke, while the watchdog's `stall / reload` only says how we noticed.
             { kind: 'recovery-exhausted' as const, reason: fatal.lastReason || stall.lastReason }
           : undefined;
       }
@@ -794,7 +805,13 @@ function useVideoPlayer({
     return () => {
       clearInterval(intervalId);
     };
-  }, [currentSrc]);
+    // `reloadNonce` matters as much as `currentSrc` here. All of this watchdog's state -- how long
+    // the stall has run, how many reloads are left -- lives in closure variables, so a rebuilt
+    // pipeline that kept the old closure would inherit a spent reload budget and a `stalledSince`
+    // from minutes ago. The first tick after a manual retry would then see a huge stall against an
+    // exhausted budget and declare the fresh attempt dead within seconds, before it had finished
+    // loading its manifest. Re-running the effect is what gives the retry a clean watchdog.
+  }, [currentSrc, reloadNonce]);
 
   // Decode-health sampling. Reads the element's cumulative playback-quality counters on a timer;
   // `evaluateDecodeHealth` turns consecutive readings into a sliding-window dropped-frame ratio.

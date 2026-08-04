@@ -271,6 +271,45 @@ describe('createPlaybackEpisodeTracker', () => {
     expect(crumbs.filter((crumb) => crumb.message.includes('budget exhausted'))).toHaveLength(1);
   });
 
+  it('does not declare defeat while another recovery path is still escalating', () => {
+    // The budgets run on different clocks: the fatal one gives up after ~30s while the watchdog is
+    // only starting its 8s restart and three 20s reloads. The deadline armed by the first must not
+    // fire on top of the second, or `grace-period` -- the one ending that means "the player ran out
+    // of options" -- gets attached to a recovery that was still working.
+    const { reports, tracker } = setup();
+
+    tracker.noteError('network', T0, true, 'networkError / fragLoadError');
+    tracker.noteExhausted('fatal-network', T0 + 30000);
+
+    tracker.noteAction('watchdog-restart', T0 + 45000);
+    tracker.tick(T0 + 60001);
+    expect(reports).toHaveLength(0);
+
+    tracker.noteAction('watchdog-reload', T0 + 70000);
+    tracker.tick(T0 + 76000);
+    expect(reports).toHaveLength(0);
+
+    // Once the actions stop, the grace period runs out from the last one.
+    tracker.tick(T0 + 70000 + EPISODE_ABANDON_GRACE_MS);
+
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({ outcome: 'abandoned', endedBy: 'grace-period' });
+    expect(reports[0].actions).toEqual(['watchdog-restart', 'watchdog-reload']);
+  });
+
+  it('does not arm a deadline for a recovery that has not run out of anything', () => {
+    const { reports, tracker } = setup();
+
+    tracker.noteError('network', T0, true, 'fatal');
+    tracker.noteAction('fatal-retry', T0 + 1000, { attempt: 1 });
+
+    // No budget has been spent, so nothing should ever abandon this on a timer.
+    tracker.tick(T0 + 1000 + EPISODE_ABANDON_GRACE_MS * 10);
+
+    expect(reports).toHaveLength(0);
+    expect(tracker.isActive()).toBe(true);
+  });
+
   it('still records a genuinely different budget running out', () => {
     const { reports, tracker } = setup();
 

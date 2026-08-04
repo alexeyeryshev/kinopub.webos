@@ -255,8 +255,10 @@ Ordered by priority, then by what unblocks what.
 > **Implemented, validation incomplete.** `src/components/player/playbackFailureNotice.tsx` shows a
 > centred panel once every recovery path is spent, with the reason and a `Повторить` button that
 > rebuilds the media pipeline from the frozen position. The terminal state is derived in
-> `media.new.tsx` (`getFailure`) and requires _both_ budgets to report `exhausted`, so it stays
-> silent while anything is still being tried; a source played without hls.js falls back to the media
+> `media.new.tsx` (`getFailure`): the stall watchdog must be exhausted, and the fatal budget too but
+> only if a fatal error ever engaged it — requiring both unconditionally would have excluded the
+> non-fatal CDN stall the watchdog exists for. It stays silent while anything is still being tried;
+> a source played without hls.js falls back to the media
 > element's own `error`, which is what closes the "`MediaRef.error` has no consumers" finding. Retry
 > rebuilds rather than restarts, via a nonce in the media effect's dependencies, because a fatal
 > hls.js error leaves the loading engine dead. See `docs/playback-diagnostics-spec.md` (Playback

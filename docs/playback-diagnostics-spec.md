@@ -388,16 +388,22 @@ frozen frame and a `recovery:` line inside an overlay reached through the settin
 
 A centred notice now appears when playback is over and the player will not fix it:
 
-- **When.** Only when every recovery path is spent. For an hls.js source that means _both_ the
-  fatal-error budget and the stall watchdog report `exhausted` — they recover from different
-  failures and act independently, so one spent budget while the other is still reloading the
-  playlist is not the end. For a source played without hls.js the media element's own `error` is
-  the whole story, since nothing retries it.
+- **When.** Only when every recovery path that _applies_ is spent — which is not the same as every
+  path that exists. For an hls.js source the stall watchdog must report `exhausted`, since it
+  engages on any stall whatever caused it; the fatal-error budget only has to be spent as well if a
+  fatal error ever engaged it. Requiring both unconditionally would have excluded the failure this
+  player was built for: a CDN edge refusing specific segments produces only non-fatal errors, so
+  hls.js never escalates, the fatal budget is never touched, and the notice would never appear for
+  the one case the watchdog exists to handle. For a source played without hls.js there are no
+  budgets and the media element's own `error` is the whole story, since nothing retries it.
 - **What.** A short line in Russian saying playback stopped and why, the underlying
   `type / details` in small text, a `Повторить` button, and a `Back: выйти` hint.
 - **Retry.** Rebuilds the media pipeline rather than restarting the stopped one: a fatal hls.js
   error leaves the loading engine dead for good, so `startLoad()` on it does nothing. The teardown
-  path already preserves the playback position, so a retry resumes where the picture froze.
+  path already preserves the playback position, so a retry resumes where the picture froze. The
+  stall watchdog is rebuilt with it: its stall clock and reload budget live in closure variables, so
+  a retry that kept the old closure would inherit a spent budget and a stall that started minutes
+  ago, and would pronounce the fresh attempt dead before it had finished loading its manifest.
 - **Focus.** The button takes focus when the notice appears, so the action is reachable from a
   remote without a pointer. The panel itself stays `pointer-events-none`, like the diagnostics
   overlay, so it never swallows a press meant for the player underneath.
@@ -437,9 +443,13 @@ Each recovery step becomes a Sentry breadcrumb (`fatal-retry`, `media-recover`, 
 - **abandoned** — playback never came back. The `playback_episode_ended_by` tag says how the episode
   ended, which matters more than it sounds:
 
-  - `grace-period` — every budget was spent and nothing resumed within 30 s, long enough to cover
-    the watchdog's full 8 s restart / 20 s playlist-reload escalation. This is the player giving up,
-    and the only ending reported at `error` level.
+  - `grace-period` — the player ran out of options: every budget was spent and nothing resumed
+    within 30 s. The deadline is armed when a budget runs out and pushed back by any further
+    recovery action, because the budgets escalate on different clocks — the fatal one gives up after
+    about half a minute while the watchdog is only starting its 8 s restart and three 20 s reloads,
+    and a fixed deadline from the first would fire in the middle of the second. Re-arming on an
+    _action_ is safe where re-arming on exhaustion was not: actions are bounded, so the deadline can
+    only move a bounded number of times. This is the only ending reported at `error` level.
   - `teardown` — the player went away mid-recovery: the viewer pressed Back, or moved to another
     episode. This is the most likely way a broken playback ends, and it was previously **not
     reported at all** — the tracker was only closed on a source change, never on unmount, so every

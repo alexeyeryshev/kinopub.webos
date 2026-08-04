@@ -201,6 +201,23 @@ export function createPlaybackEpisodeTracker(sink: EpisodeSink) {
       begin(now);
       actions.push(action);
       sink.breadcrumb({ category: 'playback', message: action, level: 'info', data });
+
+      // Something is still being tried, so the player has not run out of options -- push the
+      // deadline back. The budgets are independent and escalate on different clocks: the fatal one
+      // gives up after about half a minute while the watchdog is only starting its 8s restart and
+      // three 20s playlist reloads. Without this the deadline armed by the first budget fires
+      // mid-escalation and reports `grace-period`, which now specifically means "the player ran out
+      // of options" and is the one ending raised at error level. It would be claiming defeat on
+      // behalf of a recovery still in progress.
+      //
+      // Safe to re-arm here in a way it was not in `noteExhausted`: that ran on every 2s watchdog
+      // tick and pushed the deadline out faster than time passed, so abandonment never fired at
+      // all. Actions are bounded -- six fatal retries, three restarts, three reloads -- so the
+      // deadline can only move a bounded number of times. Only re-armed when already armed, or a
+      // healthy recovery would acquire a deadline it never had.
+      if (abandonAt !== undefined) {
+        abandonAt = now + EPISODE_ABANDON_GRACE_MS;
+      }
     },
 
     /**
