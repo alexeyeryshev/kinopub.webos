@@ -9,7 +9,8 @@ import { DecodeHealth, DecodeSample, EMPTY_DECODE_HEALTH, evaluateDecodeHealth, 
 import { getFailureCategory } from 'utils/hlsFailures';
 import { findLevelIndexForQuality } from 'utils/hlsLevels';
 import { provesStreamRecovered } from 'utils/hlsRecovery';
-import { logPlaybackIssue, resetPlaybackIssueReports } from 'utils/logging';
+import { logPlaybackIssue, resetPlaybackIssueReports, sentryEpisodeSink } from 'utils/logging';
+import { createPlaybackEpisodeTracker } from 'utils/playbackEpisode';
 import { convertToVTT } from 'utils/subtitles';
 
 export type AudioTrack = {
@@ -176,6 +177,10 @@ function useVideoPlayer({
   const decodeSamplesRef = useRef<DecodeSample[]>([]);
   const decodeErrorTimesRef = useRef<number[]>([]);
   const decodeHealthRef = useRef<DecodeHealth>(EMPTY_DECODE_HEALTH);
+  // Threads every recovery step of one failure into a single Sentry report, so the question the
+  // on-screen diagnostics could not answer -- did the recovery actually work? -- is answered
+  // without anyone having to be watching at the right moment.
+  const episodeRef = useRef(createPlaybackEpisodeTracker(sentryEpisodeSink));
 
   const getDecodeHealth = useCallback(() => decodeHealthRef.current, []);
 
@@ -342,6 +347,7 @@ function useVideoPlayer({
       decodeHealthRef.current = EMPTY_DECODE_HEALTH;
       // A new source is a new playback session, so each issue is worth reporting once more.
       resetPlaybackIssueReports();
+      episodeRef.current.reset(Date.now());
 
       if (isHLSJSActive !== false && currentSrc.includes('.m3u8') && HLS.isSupported()) {
         const hls = (hlsRef.current = new HLS({
@@ -362,6 +368,12 @@ function useVideoPlayer({
             return;
           }
 
+          // The same evidence that refills the retry budget closes the episode. Position moving is
+          // not enough: after a fatal error hls.js's engine is stopped, so playback advancing is
+          // the buffer draining, and crediting that to whichever retry happened to be in flight
+          // would make `recoveredAfter` -- the one field worth grouping on -- lie.
+          episodeRef.current.noteProgress(Date.now());
+
           recoveringStream = undefined;
           mediaRecoveryAttempts = 0;
 
@@ -374,9 +386,26 @@ function useVideoPlayer({
           // Decode failures count towards the health indicator whether or not they are fatal.
           // Non-fatal ones matter most: hls.js absorbs them silently, so without this nothing
           // surfaces a decoder that is quietly rejecting data.
-          if (getFailureCategory(data) === 'media') {
+          const category = getFailureCategory(data);
+
+          if (category === 'media') {
             decodeErrorTimesRef.current = pruneTimestamps([...decodeErrorTimesRef.current, Date.now()], Date.now());
           }
+
+          episodeRef.current.setContext({
+            quality: currentSourceTrackRef.current?.name,
+            streamingType: streamingTypeRef.current,
+            levelCount: hls.levels?.length,
+            currentLevel: hls.currentLevel,
+            bandwidthEstimate: (hls as any).bandwidthEstimate,
+          });
+          episodeRef.current.noteError(
+            category,
+            Date.now(),
+            Boolean(data?.fatal),
+            [data?.type, data?.details].filter(Boolean).join(' / '),
+            hostnameOfFragment(data),
+          );
 
           // hls.js retries non-fatal errors internally; only fatal ones stop
           // the loading engine and need the application to restart it.
@@ -399,17 +428,7 @@ function useVideoPlayer({
                 lastReason: reason,
                 lastAt: Date.now(),
               };
-              logPlaybackIssue('fatal-network-recovery-exhausted', {
-                reason,
-                host: hostnameOfFragment(data),
-                attempts: RECOVERY_MAX_NETWORK_ATTEMPTS,
-                limit: RECOVERY_MAX_NETWORK_ATTEMPTS,
-                quality: currentSourceTrackRef.current?.name,
-                streamingType: streamingTypeRef.current,
-                levelCount: hls.levels?.length,
-                currentLevel: hls.currentLevel,
-                bandwidthEstimate: (hls as any).bandwidthEstimate,
-              });
+              episodeRef.current.noteExhausted('fatal-network', Date.now(), reason);
               return;
             }
 
@@ -423,6 +442,8 @@ function useVideoPlayer({
 
             // Back off so a CDN that is refusing every request is not hammered.
             const delay = Math.min(RECOVERY_BASE_DELAY * 2 ** (attempts - 1), RECOVERY_MAX_DELAY);
+
+            episodeRef.current.noteAction('fatal-retry', Date.now(), { attempt: attempts, limit: RECOVERY_MAX_NETWORK_ATTEMPTS, delay });
             fatalRetryPendingRef.current = true;
             recoveryTimeoutId = setTimeout(() => {
               fatalRetryPendingRef.current = false;
@@ -445,15 +466,7 @@ function useVideoPlayer({
                 lastReason: reason,
                 lastAt: Date.now(),
               };
-              logPlaybackIssue('fatal-media-recovery-exhausted', {
-                reason,
-                attempts: RECOVERY_MAX_MEDIA_ATTEMPTS,
-                limit: RECOVERY_MAX_MEDIA_ATTEMPTS,
-                quality: currentSourceTrackRef.current?.name,
-                streamingType: streamingTypeRef.current,
-                levelCount: hls.levels?.length,
-                currentLevel: hls.currentLevel,
-              });
+              episodeRef.current.noteExhausted('fatal-media', Date.now(), reason);
               return;
             }
 
@@ -469,6 +482,12 @@ function useVideoPlayer({
 
             // A second media error in a row usually means the audio codec is
             // the one the decoder is choking on.
+            episodeRef.current.noteAction('media-recover', Date.now(), {
+              attempt: mediaRecoveryAttempts,
+              limit: RECOVERY_MAX_MEDIA_ATTEMPTS,
+              swapAudioCodec: mediaRecoveryAttempts > 1,
+            });
+
             if (mediaRecoveryAttempts > 1) {
               hls.swapAudioCodec();
             }
@@ -480,12 +499,7 @@ function useVideoPlayer({
           // Key-system, mux and other fatal errors have no documented in-place
           // recovery path, so record them instead of retrying blindly.
           fatalRecoveryRef.current = { ...fatalRecoveryRef.current, exhausted: true, lastReason: reason, lastAt: Date.now() };
-          logPlaybackIssue('fatal-unrecoverable', {
-            reason,
-            host: hostnameOfFragment(data),
-            quality: currentSourceTrackRef.current?.name,
-            streamingType: streamingTypeRef.current,
-          });
+          episodeRef.current.noteExhausted('fatal-unrecoverable', Date.now(), reason);
         });
         hls.on(HLS.Events.MANIFEST_PARSED, () => {
           const isAdaptive = hls.levels.length > 1;
@@ -588,13 +602,19 @@ function useVideoPlayer({
         return;
       }
 
-      // While a fatal-error retry is scheduled, that path owns recovery.
+      // Lets an armed abandonment fire without needing another failure to arrive.
+      episodeRef.current.tick(Date.now());
+
+      // While a fatal-error retry is scheduled, that path owns recovery. Keep tracking the
+      // position through it anyway: the buffer drains during the backoff, and comparing against a
+      // pre-retry position afterwards would read as movement that never happened.
       if (fatalRetryPendingRef.current) {
+        lastPosition = video.currentTime;
         return;
       }
 
       const position = video.currentTime;
-      const advancing = position !== lastPosition;
+      const advancing = lastPosition >= 0 && position !== lastPosition;
       lastPosition = position;
 
       if (video.paused || video.ended || advancing || getBufferAhead(video) > STALL_MIN_BUFFER_AHEAD) {
@@ -634,6 +654,7 @@ function useVideoPlayer({
           lastReason: 'stall / restart',
           lastAt: now,
         };
+        episodeRef.current.noteAction('watchdog-restart', now, { stalledForMs: stalledFor, position: Math.round(position) });
         hls.startLoad(position);
         return;
       }
@@ -643,11 +664,7 @@ function useVideoPlayer({
       }
 
       if (reloads >= STALL_MAX_RELOADS) {
-        logPlaybackIssue('stall-watchdog-exhausted', {
-          reason: 'stall / reload budget spent',
-          attempts: actions,
-          limit: STALL_MAX_ACTIONS,
-        });
+        episodeRef.current.noteExhausted('stall-watchdog', Date.now(), 'stall / reload budget spent');
         stallRecoveryRef.current = {
           attempts: actions,
           limit: STALL_MAX_ACTIONS,
@@ -664,6 +681,7 @@ function useVideoPlayer({
       actions += 1;
       stalledSince = now;
       restarted = false;
+      episodeRef.current.noteAction('watchdog-reload', now, { reload: reloads, limit: STALL_MAX_RELOADS, position: Math.round(position) });
       stallRecoveryRef.current = {
         attempts: actions,
         limit: STALL_MAX_ACTIONS,

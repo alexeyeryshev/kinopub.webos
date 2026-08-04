@@ -381,6 +381,47 @@ Reported conditions, all of them states the player could not resolve on its own:
 - `stall-watchdog-exhausted`
 - `decode-health-severe`
 
+### Recovery episodes
+
+A single error report cannot answer the question that matters — _did the recovery work?_ — because
+the answer is in what happens next. So failures are tracked as **episodes**: everything between the
+first fatal error and the moment playback either resumes or is given up on.
+
+Each recovery step becomes a Sentry breadcrumb (`fatal-retry`, `media-recover`, `watchdog-restart`,
+`watchdog-reload`, `… budget exhausted`), and one event is sent when the episode concludes:
+
+- **recovered** — playback moved again. The tag `playback_recovered_after` names the last action
+  taken, which is the field worth grouping on: it says which recovery path actually beats this
+  failure.
+- **abandoned** — every budget was spent and playback never resumed within a 30 s grace period,
+  long enough to cover the watchdog's full 8 s restart / 20 s playlist-reload escalation.
+
+Volume is the binding constraint. The failure under investigation emits roughly three errors a
+second; breadcrumbing each would fill Sentry's 100-entry buffer in about half a minute and evict
+exactly the early context that explains the episode. Repeated errors are therefore counted and
+summarised at most once every 10 s, while the rare, meaningful steps are recorded individually. The
+full per-category counts still travel in the episode summary.
+
+An episode is resolved by the _same evidence that refills the retry budget_: a media fragment
+buffering on the stream that was failing (`provesStreamRecovered`). Position moving is deliberately
+not enough. A fatal error stops hls.js's loading engine, so playback carrying on afterwards is the
+buffer draining, and crediting that to whichever retry happened to be in flight would make
+`playback_recovered_after` — the one field worth grouping on — lie. The episode also stays open
+until a recovery action has actually been attempted, otherwise one failure arrives as two unrelated
+reports.
+
+Arming the abandonment deadline is idempotent per budget. The watchdog re-enters its exhausted
+branch on every tick while playback stays stalled, and re-arming there would push the deadline out
+faster than time passes, so the abandoned episode would never be reported at all.
+
+Failures the player tries to recover from are reported _only_ as episodes. The standalone
+`logPlaybackIssue` path is limited to `decode-health-severe`, which is not an episode; sending both
+would tell the same story twice and spend twice the quota. The stream context those reports carried
+— quality, streaming type, level count, bandwidth estimate — moves onto the episode summary.
+
+The state machine is in `src/utils/playbackEpisode.ts` with unit tests; `sentryEpisodeSink` in
+`src/utils/logging.ts` is the only part that touches Sentry.
+
 Two rules keep this useful:
 
 - **One report per issue per playback session.** The failure this project has been chasing produces
