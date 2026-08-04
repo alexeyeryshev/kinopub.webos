@@ -12,13 +12,19 @@
  *   display show HDR", which on an HDR television is always yes, whatever is currently playing.
  * - **The pinned hls.js does not parse `VIDEO-RANGE`.** Support for it arrived in a later version.
  *   The raw attribute does survive on `level.attrs`, though, because hls.js keeps the whole
- *   `EXT-X-STREAM-INF` attribute list — so *if* the manifest declares it, it is readable.
+ *   `EXT-X-STREAM-INF` attribute list. **These manifests do declare it** — `PQ` was read off two HDR
+ *   titles on the TV — so this is the one trustworthy signal available, and it is what drives the
+ *   HDR-aware subtitle brightness and the player's HDR badge.
  * - **The KinoPub API exposes no per-file HDR flag.** `supportHdr` is a device capability; `File`
  *   carries only `codec`, `quality` and dimensions.
  *
- * So this module reads the two signals that might exist and reports them, rather than deciding
- * anything. The diagnostics overlay shows both, which is how we find out whether `VIDEO-RANGE` is
- * present in these manifests. Automatic selection can follow once that question has an answer.
+ * So decisions are made from `VIDEO-RANGE` alone. The display capability is still reported in the
+ * diagnostics overlay, because it explains *why* white is blinding on this panel, but nothing keys
+ * off it: on an HDR television it reads `high` whatever is playing.
+ *
+ * An absent attribute means "not declared", never "SDR". Progressive sources and single-file HLS
+ * have no master playlist and so no answer at all, and inventing one there would be the same
+ * mistake as the codec guess.
  */
 
 /** Values `VIDEO-RANGE` can take in an HLS master playlist. `PQ` and `HLG` are the HDR ones. */
@@ -42,6 +48,37 @@ export function getLevelVideoRange(level: any): VideoRange | undefined {
   const normalized = raw.toUpperCase();
 
   return normalized === 'SDR' || normalized === 'PQ' || normalized === 'HLG' ? normalized : undefined;
+}
+
+/**
+ * The range of the stream as a whole: the level actually playing if it declares one, otherwise the
+ * first level that does.
+ *
+ * The fallback matters at startup and in Auto mode, where `currentLevel` is -1 until hls.js picks
+ * one. Every level of a master playlist normally shares a transfer function — a playlist mixing HDR
+ * and SDR variants would be unusual — so the first declaration is a sound stand-in for a few
+ * seconds rather than showing nothing.
+ */
+export function getStreamVideoRange(levels: any[] | undefined, currentLevel?: number): VideoRange | undefined {
+  if (!levels?.length) {
+    return undefined;
+  }
+
+  const current = currentLevel !== undefined && currentLevel >= 0 ? getLevelVideoRange(levels[currentLevel]) : undefined;
+
+  if (current) {
+    return current;
+  }
+
+  for (const level of levels) {
+    const range = getLevelVideoRange(level);
+
+    if (range) {
+      return range;
+    }
+  }
+
+  return undefined;
 }
 
 /** `PQ` and `HLG` are HDR transfer functions; `SDR` is not; an absent attribute says nothing. */

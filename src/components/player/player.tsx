@@ -15,10 +15,11 @@ import DecodeHealthIndicator from './decodeHealthIndicator';
 import { getVideoNode } from './getVideoNode';
 import PlaybackDiagnosticsOverlay from './playbackDiagnostics';
 import PlaybackFailureNotice from './playbackFailureNotice';
-import Settings from './settings';
+import Settings, { SUBTITLE_OPACITY_HDR_DEFAULT, SUBTITLE_OPACITY_SDR_DEFAULT } from './settings';
 import StartFrom from './startFrom';
 
 import { DecodeHealth } from 'utils/decodeHealth';
+import { VideoRange, isHdrVideoRange } from 'utils/hdr';
 
 export type PlayerProps = {
   title: string;
@@ -68,39 +69,50 @@ const Player: React.FC<PlayerProps> = ({
   const [isDiagnosticsExportVisible, setIsDiagnosticsExportVisible] = useState(false);
   const [decodeHealth, setDecodeHealth] = useState<DecodeHealth>();
   const [failure, setFailure] = useState<PlaybackFailure>();
+  const [videoRange, setVideoRange] = useState<VideoRange>();
   const [controlsVisible, setControlsVisible] = useState(true);
   const [isPauseByOKClickActive] = useStorageState<boolean>('is_pause_by_ok_click_active');
-  // Subtitle brightness is remembered per title as well as globally. The right value is not one
-  // number: on the TV an HDR title wanted 25% while SDR sat around 50-75%, and nothing available to
-  // the app reliably says which is playing (see `utils/hdr`). Per-title memory sidesteps the
-  // question -- a film, or a series, keeps whatever was chosen for it -- while the global value
-  // seeds anything not seen before.
-  const [globalSubtitleOpacity, setGlobalSubtitleOpacity] = useStorageState<number>('subtitle_opacity', 1);
+  // Subtitle brightness needs two defaults, not one. Measured on the TV: an HDR title wants about
+  // 25% while SDR sits around 50-75%, because an HDR display maps white to a peak the video itself
+  // rarely reaches. Which of the two applies is now known rather than guessed -- these manifests
+  // declare `VIDEO-RANGE`, and `PQ` was read off HDR titles on the panel.
+  //
+  // A per-title value still wins over both, so anything watched twice keeps exactly what was chosen
+  // for it, and a stream whose range is not declared falls back to the SDR default rather than
+  // inventing an answer.
+  const isHdrStream = isHdrVideoRange(videoRange);
+  const [sdrSubtitleOpacity, setSdrSubtitleOpacity] = useStorageState<number>('subtitle_opacity', SUBTITLE_OPACITY_SDR_DEFAULT);
+  const [hdrSubtitleOpacity, setHdrSubtitleOpacity] = useStorageState<number>('subtitle_opacity_hdr', SUBTITLE_OPACITY_HDR_DEFAULT);
+  const rangeSubtitleOpacity = isHdrStream ? hdrSubtitleOpacity : sdrSubtitleOpacity;
   const subtitleOpacityKey = `item_${item?.id ?? 'default'}_saved_subtitle_opacity` as const;
-  const [itemSubtitleOpacity, setItemSubtitleOpacity] = useStorageState<number>(subtitleOpacityKey, globalSubtitleOpacity);
-  const subtitleOpacity = item ? itemSubtitleOpacity : globalSubtitleOpacity;
+  const [itemSubtitleOpacity, setItemSubtitleOpacity] = useStorageState<number>(subtitleOpacityKey, rangeSubtitleOpacity);
+  const subtitleOpacity = item ? itemSubtitleOpacity : rangeSubtitleOpacity;
 
   const handleSubtitleOpacityChange = useCallback(
     (opacity: number) => {
-      // Both: this title keeps the choice, and the next unseen one starts from it rather than from
-      // whatever was set months ago.
-      setGlobalSubtitleOpacity(opacity);
+      // Saved against the range it was chosen under, so adjusting an HDR film never moves the SDR
+      // default, and against the title, so this one keeps it regardless.
+      if (isHdrStream) {
+        setHdrSubtitleOpacity(opacity);
+      } else {
+        setSdrSubtitleOpacity(opacity);
+      }
 
       if (item) {
         setItemSubtitleOpacity(opacity);
       }
     },
-    [item, setGlobalSubtitleOpacity, setItemSubtitleOpacity],
+    [item, isHdrStream, setHdrSubtitleOpacity, setSdrSubtitleOpacity, setItemSubtitleOpacity],
   );
   const [currentSourceName, setCurrentSourceName] = useState<string | null>(null);
 
   const isAutoQuality = currentSourceName === AUTO_SOURCE_NAME;
   const activeSource = sources?.find((s) => s.name === currentSourceName) || sources?.find((s) => s.default) || sources?.[0];
   const qualityLabel = isAutoQuality ? `${AUTO_SOURCE_NAME} (${activeSource?.name})` : activeSource?.name;
-  const isHDR =
-    activeSource?.codec?.toLowerCase().includes('hevc') ||
-    activeSource?.codec === 'h265' ||
-    activeSource?.name?.toLowerCase().includes('hdr');
+  // Read from the manifest's `VIDEO-RANGE`, not guessed from the codec. The old test treated any
+  // HEVC stream as HDR, which is wrong for most of them -- HEVC is a codec, HDR is a transfer
+  // characteristic. Undeclared means unknown, and unknown shows nothing rather than a guess.
+  const isHDR = isHdrStream;
 
   const handlePlay = useCallback(() => {
     setIsSettingsOpen(false);
@@ -255,6 +267,12 @@ const Player: React.FC<PlayerProps> = ({
       const nextFailure = video?.failure;
 
       setFailure((current) => (current?.since === nextFailure?.since ? current : nextFailure));
+
+      // Levels arrive a moment after playback starts, and in Auto mode the level is only chosen
+      // later still, so this is polled rather than read once.
+      const nextRange = video?.videoRange;
+
+      setVideoRange((current) => (current === nextRange ? current : nextRange));
     }, 2000);
 
     return () => {
