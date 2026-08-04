@@ -144,6 +144,20 @@ Use this checklist on an LG webOS TV after installing a build that includes the 
   `media/decode` counter in `Failure Summary` moves by the same amount — the two read the same
   categorisation and must agree.
 
+## Recovery Episodes In Sentry
+
+- Reproduce a stall, then let it run to completion rather than restarting playback.
+- In Sentry, find the `playback: recovered …` or `playback: recovery abandoned …` event.
+- Confirm its breadcrumbs show the whole chain in order: the episode start, each fatal error, each
+  `fatal-retry` with its attempt number and delay, any `watchdog-restart` / `watchdog-reload`, and
+  the budget-exhausted entries.
+- Confirm the non-fatal error flood appears as periodic `N non-fatal errors` summaries rather than
+  hundreds of individual breadcrumbs, and that `errorCounts` in the event context still totals them
+  all.
+- For a recovered episode, confirm the `playback_recovered_after` tag names the action that came
+  last — this is what says which recovery path works.
+- Confirm exactly one event is sent per episode, not one per error.
+
 ## Privacy Check
 
 - Inspect the overlay during HLS errors.

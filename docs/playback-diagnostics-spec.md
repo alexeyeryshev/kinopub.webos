@@ -381,6 +381,35 @@ Reported conditions, all of them states the player could not resolve on its own:
 - `stall-watchdog-exhausted`
 - `decode-health-severe`
 
+### Recovery episodes
+
+A single error report cannot answer the question that matters — _did the recovery work?_ — because
+the answer is in what happens next. So failures are tracked as **episodes**: everything between the
+first fatal error and the moment playback either resumes or is given up on.
+
+Each recovery step becomes a Sentry breadcrumb (`fatal-retry`, `media-recover`, `watchdog-restart`,
+`watchdog-reload`, `… budget exhausted`), and one event is sent when the episode concludes:
+
+- **recovered** — playback moved again. The tag `playback_recovered_after` names the last action
+  taken, which is the field worth grouping on: it says which recovery path actually beats this
+  failure.
+- **abandoned** — every budget was spent and playback never resumed within a 30 s grace period,
+  long enough to cover the watchdog's full 8 s restart / 20 s playlist-reload escalation.
+
+Volume is the binding constraint. The failure under investigation emits roughly three errors a
+second; breadcrumbing each would fill Sentry's 100-entry buffer in about half a minute and evict
+exactly the early context that explains the episode. Repeated errors are therefore counted and
+summarised at most once every 10 s, while the rare, meaningful steps are recorded individually. The
+full per-category counts still travel in the episode summary.
+
+Playback carrying on immediately after a fatal error does _not_ count as recovery: a fatal error
+stops hls.js's loading engine, so what continues is the buffer draining. The episode stays open until
+a recovery action has actually been attempted, otherwise one failure arrives as two unrelated
+reports.
+
+The state machine is in `src/utils/playbackEpisode.ts` with unit tests; `sentryEpisodeSink` in
+`src/utils/logging.ts` is the only part that touches Sentry.
+
 Two rules keep this useful:
 
 - **One report per issue per playback session.** The failure this project has been chasing produces

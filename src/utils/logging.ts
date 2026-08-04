@@ -2,6 +2,7 @@ import * as Sentry from '@sentry/browser';
 import { Integrations as TracingIntegrations } from '@sentry/tracing';
 
 import { APP_VERSION } from 'utils/app';
+import { EpisodeSink, EpisodeSummary } from 'utils/playbackEpisode';
 
 /**
  * Playback failures are reported here as well as in the on-screen diagnostics.
@@ -20,6 +21,10 @@ Sentry.init({
   // the same rule the diagnostics overlay follows.
   beforeSend: scrubEvent,
   beforeBreadcrumb: scrubBreadcrumb,
+  // The recovery trail is the payload: a stalled episode wants its whole chain of retries and
+  // watchdog actions attached, and the default of 100 leaves room for that once repeated errors
+  // are aggregated rather than breadcrumbed one by one.
+  maxBreadcrumbs: 100,
 });
 
 const URL_PATTERN = /\bhttps?:\/\/[^\s"'<>]+/gi;
@@ -142,3 +147,48 @@ export function logPlaybackIssue(issue: PlaybackIssue, context: PlaybackIssueCon
     Sentry.captureMessage(`playback: ${issue}`);
   });
 }
+
+/**
+ * Sends recovery episodes to Sentry: each step as a breadcrumb, one event when the episode
+ * concludes. The breadcrumbs Sentry has collected by then ride along with that event, so the
+ * report answers not just "what failed" but "what the player did about it, and whether it worked".
+ */
+export const sentryEpisodeSink: EpisodeSink = {
+  breadcrumb: (crumb) => {
+    Sentry.addBreadcrumb({
+      category: crumb.category,
+      message: crumb.message,
+      level: crumb.level === 'error' ? Sentry.Severity.Error : crumb.level === 'warning' ? Sentry.Severity.Warning : Sentry.Severity.Info,
+      data: crumb.data ? scrubUrls(crumb.data) : undefined,
+    });
+  },
+
+  report: (summary: EpisodeSummary) => {
+    Sentry.withScope((scope) => {
+      scope.setTag('playback_episode', summary.outcome);
+
+      if (summary.lastReason) {
+        scope.setTag('playback_reason', summary.lastReason);
+      }
+
+      if (summary.host) {
+        scope.setTag('playback_host', summary.host);
+      }
+
+      // The action that immediately preceded recovery is the single most useful field here: it is
+      // what tells us which recovery path actually works against this failure.
+      if (summary.recoveredAfter) {
+        scope.setTag('playback_recovered_after', summary.recoveredAfter);
+      }
+
+      scope.setContext('playback_episode', scrubUrls({ ...summary }));
+      scope.setLevel(summary.outcome === 'abandoned' ? Sentry.Severity.Error : Sentry.Severity.Warning);
+
+      Sentry.captureMessage(
+        summary.outcome === 'abandoned'
+          ? `playback: recovery abandoned after ${Math.round(summary.durationMs / 1000)}s`
+          : `playback: recovered after ${Math.round(summary.durationMs / 1000)}s via ${summary.recoveredAfter || 'retry'}`,
+      );
+    });
+  },
+};
