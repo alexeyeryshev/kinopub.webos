@@ -6,6 +6,7 @@ import forEach from 'lodash/forEach';
 import useStorageState from 'hooks/useStorageState';
 
 import { findLevelIndexForQuality } from 'utils/hlsLevels';
+import { provesStreamRecovered } from 'utils/hlsRecovery';
 import { convertToVTT } from 'utils/subtitles';
 
 export type AudioTrack = {
@@ -312,15 +313,12 @@ function useVideoPlayer({
           hls.loadSource(currentSrc);
         });
 
-        // A buffered fragment means the stream is healthy again, so the next
-        // unrelated failure starts from a full budget instead of inheriting
-        // the attempts an earlier, already-survived outage used up.
+        // A media fragment buffered on the failing stream means it is healthy
+        // again, so the next unrelated failure starts from a full budget
+        // instead of inheriting the attempts an already-survived outage used
+        // up. See `provesStreamRecovered` for what does and does not count.
         hls.on(HLS.Events.FRAG_BUFFERED, (_event, data: any) => {
-          // Main and audio fragments load independently, so only the stream
-          // that was failing proves recovery. Without this, a healthy audio
-          // fragment would clear the budget the main stream is still burning
-          // through, pinning it at attempt 1 and retrying every second forever.
-          if (recoveringStream && data?.frag?.type && data.frag.type !== recoveringStream) {
+          if (!provesStreamRecovered(data?.frag, recoveringStream)) {
             return;
           }
 
