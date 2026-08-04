@@ -117,6 +117,21 @@ Use this checklist on an LG webOS TV after installing a build that includes the 
 - Open the export again and confirm the QR does not change or flicker while it is on screen (the
   capture is frozen at the moment it was opened).
 
+## Recovery Budget
+
+- Reproduce a segment the CDN refuses (seek into an unbuffered region of a title that has shown
+  `HTTP 0` before).
+- Watch the `recovery:` line in `Failure Summary`. The attempt count must **climb** — `1/6`, `2/6`,
+  … — with the gap between retries growing (1, 2, 4, 8, 8, 8 s).
+- Confirm it reaches `gave up after 6, networkError / fragLoadError` within roughly a minute, and
+  that `FRAG_LOADING` events then stop entirely.
+- A count that sits at `1/6` while the `network` failure counter keeps climbing is the regression
+  this guards against: recovery restarting the loading engine refetches the init segment, and
+  counting that as proof of recovery refills the budget forever. `src/utils/hlsRecovery.test.ts`
+  covers the rule.
+- Confirm that once playback genuinely resumes, a later unrelated failure starts again from `1/6`
+  rather than inheriting the spent budget.
+
 ## Privacy Check
 
 - Inspect the overlay during HLS errors.

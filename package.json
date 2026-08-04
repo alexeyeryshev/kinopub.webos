@@ -66,6 +66,7 @@
     "@enact/dev-utils": "4.1.1",
     "@simbathesailor/use-what-changed": "2.0.0",
     "@types/gtag.js": "0.0.7",
+    "@types/jest": "^26.0.24",
     "@types/js-cookie": "2.2.7",
     "@types/lodash": "4.14.172",
     "@types/react": "17.0.19",
