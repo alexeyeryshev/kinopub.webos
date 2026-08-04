@@ -40,6 +40,8 @@ export type EpisodeSummary = {
   host?: string;
   /** What was happening when the episode resolved, for `recovered` outcomes. */
   recoveredAfter?: string;
+  /** Stream details, attached by the player so a report explains what was playing. */
+  context?: Record<string, unknown>;
 };
 
 export type EpisodeSink = {
@@ -71,6 +73,7 @@ export function createPlaybackEpisodeTracker(sink: EpisodeSink) {
   let abandonAt: number | undefined;
   let lastErrorSummaryAt = 0;
   let unsummarisedErrors = 0;
+  let context: Record<string, unknown> | undefined;
 
   function reset() {
     startedAt = undefined;
@@ -83,6 +86,7 @@ export function createPlaybackEpisodeTracker(sink: EpisodeSink) {
     abandonAt = undefined;
     lastErrorSummaryAt = 0;
     unsummarisedErrors = 0;
+    context = undefined;
   }
 
   function begin(now: number) {
@@ -110,6 +114,7 @@ export function createPlaybackEpisodeTracker(sink: EpisodeSink) {
       lastReason,
       host,
       recoveredAfter,
+      context,
     };
 
     reset();
@@ -122,10 +127,19 @@ export function createPlaybackEpisodeTracker(sink: EpisodeSink) {
   return {
     /** Any hls.js error, fatal or not. Only fatals open an episode; the rest are counted. */
     noteError(category: string, now: number, fatal: boolean, reason?: string, errorHost?: string) {
+      if (fatal) {
+        begin(now);
+      }
+
+      // Only errors inside the episode belong in its summary. Counting the quiet ones that happen
+      // between episodes would inflate the next report with failures it did not involve.
+      if (startedAt === undefined) {
+        return;
+      }
+
       errorCounts[category] = (errorCounts[category] || 0) + 1;
 
       if (fatal) {
-        begin(now);
         fatalCount += 1;
         lastReason = reason;
         host = errorHost || host;
@@ -136,10 +150,6 @@ export function createPlaybackEpisodeTracker(sink: EpisodeSink) {
           data: { reason, host: errorHost },
         });
 
-        return;
-      }
-
-      if (startedAt === undefined) {
         return;
       }
 
@@ -158,6 +168,11 @@ export function createPlaybackEpisodeTracker(sink: EpisodeSink) {
       }
     },
 
+    /** Stream details for the eventual report. Last write wins, so it can be refreshed freely. */
+    setContext(next: Record<string, unknown>) {
+      context = next;
+    },
+
     /** A recovery step the application took. */
     noteAction(action: string, now: number, data?: Record<string, unknown>) {
       begin(now);
@@ -165,9 +180,20 @@ export function createPlaybackEpisodeTracker(sink: EpisodeSink) {
       sink.breadcrumb({ category: 'playback', message: action, level: 'info', data });
     },
 
-    /** A recovery budget ran out. Arms the abandonment timer. */
+    /**
+     * A recovery budget ran out. Arms the abandonment timer.
+     *
+     * Idempotent per budget on purpose: the watchdog re-enters its exhausted branch on every tick
+     * while playback stays stalled, and re-arming there would push the deadline further out every
+     * two seconds so the abandoned episode would never be reported at all.
+     */
     noteExhausted(which: string, now: number, reason?: string) {
       begin(now);
+
+      if (exhausted.includes(which)) {
+        return;
+      }
+
       exhausted.push(which);
       lastReason = reason || lastReason;
       abandonAt = now + EPISODE_ABANDON_GRACE_MS;

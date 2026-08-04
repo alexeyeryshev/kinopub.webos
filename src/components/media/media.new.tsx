@@ -368,6 +368,12 @@ function useVideoPlayer({
             return;
           }
 
+          // The same evidence that refills the retry budget closes the episode. Position moving is
+          // not enough: after a fatal error hls.js's engine is stopped, so playback advancing is
+          // the buffer draining, and crediting that to whichever retry happened to be in flight
+          // would make `recoveredAfter` -- the one field worth grouping on -- lie.
+          episodeRef.current.noteProgress(Date.now());
+
           recoveringStream = undefined;
           mediaRecoveryAttempts = 0;
 
@@ -386,6 +392,13 @@ function useVideoPlayer({
             decodeErrorTimesRef.current = pruneTimestamps([...decodeErrorTimesRef.current, Date.now()], Date.now());
           }
 
+          episodeRef.current.setContext({
+            quality: currentSourceTrackRef.current?.name,
+            streamingType: streamingTypeRef.current,
+            levelCount: hls.levels?.length,
+            currentLevel: hls.currentLevel,
+            bandwidthEstimate: (hls as any).bandwidthEstimate,
+          });
           episodeRef.current.noteError(
             category,
             Date.now(),
@@ -416,17 +429,6 @@ function useVideoPlayer({
                 lastAt: Date.now(),
               };
               episodeRef.current.noteExhausted('fatal-network', Date.now(), reason);
-              logPlaybackIssue('fatal-network-recovery-exhausted', {
-                reason,
-                host: hostnameOfFragment(data),
-                attempts: RECOVERY_MAX_NETWORK_ATTEMPTS,
-                limit: RECOVERY_MAX_NETWORK_ATTEMPTS,
-                quality: currentSourceTrackRef.current?.name,
-                streamingType: streamingTypeRef.current,
-                levelCount: hls.levels?.length,
-                currentLevel: hls.currentLevel,
-                bandwidthEstimate: (hls as any).bandwidthEstimate,
-              });
               return;
             }
 
@@ -465,15 +467,6 @@ function useVideoPlayer({
                 lastAt: Date.now(),
               };
               episodeRef.current.noteExhausted('fatal-media', Date.now(), reason);
-              logPlaybackIssue('fatal-media-recovery-exhausted', {
-                reason,
-                attempts: RECOVERY_MAX_MEDIA_ATTEMPTS,
-                limit: RECOVERY_MAX_MEDIA_ATTEMPTS,
-                quality: currentSourceTrackRef.current?.name,
-                streamingType: streamingTypeRef.current,
-                levelCount: hls.levels?.length,
-                currentLevel: hls.currentLevel,
-              });
               return;
             }
 
@@ -507,12 +500,6 @@ function useVideoPlayer({
           // recovery path, so record them instead of retrying blindly.
           fatalRecoveryRef.current = { ...fatalRecoveryRef.current, exhausted: true, lastReason: reason, lastAt: Date.now() };
           episodeRef.current.noteExhausted('fatal-unrecoverable', Date.now(), reason);
-          logPlaybackIssue('fatal-unrecoverable', {
-            reason,
-            host: hostnameOfFragment(data),
-            quality: currentSourceTrackRef.current?.name,
-            streamingType: streamingTypeRef.current,
-          });
         });
         hls.on(HLS.Events.MANIFEST_PARSED, () => {
           const isAdaptive = hls.levels.length > 1;
@@ -618,22 +605,19 @@ function useVideoPlayer({
       // Lets an armed abandonment fire without needing another failure to arrive.
       episodeRef.current.tick(Date.now());
 
-      // While a fatal-error retry is scheduled, that path owns recovery.
+      // While a fatal-error retry is scheduled, that path owns recovery. Keep tracking the
+      // position through it anyway: the buffer drains during the backoff, and comparing against a
+      // pre-retry position afterwards would read as movement that never happened.
       if (fatalRetryPendingRef.current) {
+        lastPosition = video.currentTime;
         return;
       }
 
       const position = video.currentTime;
-      const advancing = position !== lastPosition;
+      const advancing = lastPosition >= 0 && position !== lastPosition;
       lastPosition = position;
 
       if (video.paused || video.ended || advancing || getBufferAhead(video) > STALL_MIN_BUFFER_AHEAD) {
-        // Playback moving again is the only honest proof a recovery worked, so it is what closes
-        // an episode -- and the action that came last is what gets the credit in the report.
-        if (advancing && episodeRef.current.isActive()) {
-          episodeRef.current.noteProgress(Date.now());
-        }
-
         stalledSince = undefined;
         restarted = false;
 
@@ -681,11 +665,6 @@ function useVideoPlayer({
 
       if (reloads >= STALL_MAX_RELOADS) {
         episodeRef.current.noteExhausted('stall-watchdog', Date.now(), 'stall / reload budget spent');
-        logPlaybackIssue('stall-watchdog-exhausted', {
-          reason: 'stall / reload budget spent',
-          attempts: actions,
-          limit: STALL_MAX_ACTIONS,
-        });
         stallRecoveryRef.current = {
           attempts: actions,
           limit: STALL_MAX_ACTIONS,

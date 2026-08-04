@@ -79,15 +79,13 @@ export function logException(exception: any) {
 }
 
 /**
- * Playback problems worth a report. Deliberately narrow: these are conditions the player could not
- * resolve on its own, or a decoder that is visibly struggling — not every transient error.
+ * Standalone playback problems, reported once per session.
+ *
+ * Failures the player tries to recover from are *not* here: they belong to a recovery episode,
+ * which reports the whole chain and its outcome as one event (see `sentryEpisodeSink`). Sending
+ * both would tell the same story twice and spend the quota doing it.
  */
-export type PlaybackIssue =
-  | 'fatal-network-recovery-exhausted'
-  | 'fatal-media-recovery-exhausted'
-  | 'fatal-unrecoverable'
-  | 'stall-watchdog-exhausted'
-  | 'decode-health-severe';
+export type PlaybackIssue = 'decode-health-severe';
 
 export type PlaybackIssueContext = {
   reason?: string;
@@ -140,9 +138,8 @@ export function logPlaybackIssue(issue: PlaybackIssue, context: PlaybackIssueCon
     }
 
     scope.setContext('playback', scrubUrls({ ...context }));
-    // Playback keeps going in most of these cases, so they are not crashes; but they are the
-    // failures worth acting on, hence error rather than warning for the exhausted ones.
-    scope.setLevel(issue === 'decode-health-severe' ? Sentry.Severity.Warning : Sentry.Severity.Error);
+    // Playback keeps going through these, so they are warnings rather than crashes.
+    scope.setLevel(Sentry.Severity.Warning);
 
     Sentry.captureMessage(`playback: ${issue}`);
   });

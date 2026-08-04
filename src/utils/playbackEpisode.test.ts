@@ -189,4 +189,66 @@ describe('createPlaybackEpisodeTracker', () => {
     expect(reports[0].fatalCount).toBe(3);
     expect(reports[0].lastReason).toBe('third');
   });
+
+  it('re-arming an exhausted budget does not push the abandonment deadline away', () => {
+    // The watchdog re-enters its exhausted branch on every 2s tick while playback stays stalled.
+    // Re-arming there would move the deadline out faster than time passes, so `abandoned` would
+    // never be reported at all.
+    const { crumbs, reports, tracker } = setup();
+
+    tracker.noteError('network', T0, true, 'fatal');
+    tracker.noteExhausted('stall-watchdog', T0 + 1000);
+
+    for (let t = T0 + 3000; t < T0 + 1000 + EPISODE_ABANDON_GRACE_MS; t += 2000) {
+      tracker.noteExhausted('stall-watchdog', t);
+      tracker.tick(t);
+    }
+
+    expect(reports).toHaveLength(0);
+
+    tracker.tick(T0 + 1000 + EPISODE_ABANDON_GRACE_MS);
+
+    expect(reports).toHaveLength(1);
+    expect(reports[0].outcome).toBe('abandoned');
+    // And the repeats leave no duplicate entries or breadcrumb spam behind.
+    expect(reports[0].exhausted).toEqual(['stall-watchdog']);
+    expect(crumbs.filter((crumb) => crumb.message.includes('budget exhausted'))).toHaveLength(1);
+  });
+
+  it('still records a genuinely different budget running out', () => {
+    const { reports, tracker } = setup();
+
+    tracker.noteError('network', T0, true, 'fatal');
+    tracker.noteExhausted('fatal-network', T0 + 1000);
+    tracker.noteExhausted('stall-watchdog', T0 + 40000);
+    tracker.tick(T0 + 40000 + EPISODE_ABANDON_GRACE_MS);
+
+    expect(reports[0].exhausted).toEqual(['fatal-network', 'stall-watchdog']);
+  });
+
+  it('excludes errors that happened before the episode opened', () => {
+    const { reports, tracker } = setup();
+
+    // Transient failures between episodes must not be charged to the next one.
+    tracker.noteError('network', T0, false);
+    tracker.noteError('media', T0 + 100, false);
+
+    tracker.noteError('network', T0 + 5000, true, 'fatal');
+    tracker.noteAction('fatal-retry', T0 + 5100);
+    tracker.noteError('network', T0 + 6000, false);
+    tracker.noteProgress(T0 + 7000);
+
+    expect(reports[0].errorCounts).toEqual({ network: 2 });
+  });
+
+  it('carries the stream context set by the player', () => {
+    const { reports, tracker } = setup();
+
+    tracker.noteError('network', T0, true, 'fatal');
+    tracker.setContext({ quality: '480p', levelCount: 4 });
+    tracker.noteAction('fatal-retry', T0 + 100);
+    tracker.noteProgress(T0 + 2000);
+
+    expect(reports[0].context).toEqual({ quality: '480p', levelCount: 4 });
+  });
 });
