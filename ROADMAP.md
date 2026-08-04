@@ -110,6 +110,16 @@ If a source cannot adapt in place, treat switching to another source URL as a se
 
 **Follow-up fix:** the budget originally reset on any `FRAG_BUFFERED` for that stream, which included the init segment. Restarting the loading engine is exactly what refetches an init segment, so recovery manufactured its own proof of success: every retry reloaded the init segment, cleared the budget it had just spent, and went round again. Two LG G5 captures 91 s apart caught it — failed requests climbing 65 → 325 (~2.9/s, no decay), decoded frames frozen at 165, and `recovery` pinned at `attempts=1/6` throughout, in a ~4 s loop of fatal → `startLoad()` → init segment → retries → fatal against one segment the CDN answered with `HTTP 0`. With the budget able to drain, the backoff finally escalates (1→2→4→8→8→8 s) and the player gives up after roughly a minute, reporting `gave up after 6` instead of hammering the CDN indefinitely. The rule now lives in `src/utils/hlsRecovery.ts` with unit tests, since it is subtle and failed silently. Quality switching also moved from `currentLevel` to `nextLevel`, because `currentLevel` flushes the entire buffer to apply the switch instantly -- that is what converted a stream coasting through network failures on 82 s of buffer into an unrecoverable stall. The automatic _quality reduction_ described above is still open and deliberately separate from error recovery.
 
+**Scope narrowed after on-device observation.** Two distinct problems were being conflated here:
+
+- _Network_ — quality already moves on its own when the connection degrades, observed on a busy
+  evening. HLS.js ABR covers this; nothing more is needed.
+- _Decode_ — the decoder struggling is a different failure, and reducing quality automatically for
+  it would be acting on a signal nobody has validated yet. So this ships an **indicator only**:
+  a corner badge driven by the dropped-frame ratio over a sliding window, plus hard decode errors.
+  See `docs/playback-diagnostics-spec.md` (Decode Health Indicator). Automatic reduction stays open
+  until captures show what the decode failure actually looks like.
+
 ### 5. P1 — Reduce excessive subtitle brightness, especially in HDR
 
 **Status:** the manual subtitle brightness/opacity control described below has been implemented (in-player Settings popup, persisted via storage, applied through `video::cue { opacity: var(--subtitle-opacity) }` so it covers native `<track>` and HLS.js-rendered cues alike). The reproduction/isolation steps and the scene-adaptive follow-up are still open.

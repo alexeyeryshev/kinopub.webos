@@ -5,8 +5,11 @@ import forEach from 'lodash/forEach';
 
 import useStorageState from 'hooks/useStorageState';
 
+import { DecodeHealth, DecodeSample, EMPTY_DECODE_HEALTH, evaluateDecodeHealth, pruneSamples, pruneTimestamps } from 'utils/decodeHealth';
+import { getFailureCategory } from 'utils/hlsFailures';
 import { findLevelIndexForQuality } from 'utils/hlsLevels';
 import { provesStreamRecovered } from 'utils/hlsRecovery';
+import { logPlaybackIssue, resetPlaybackIssueReports } from 'utils/logging';
 import { convertToVTT } from 'utils/subtitles';
 
 export type AudioTrack = {
@@ -64,6 +67,25 @@ const STALL_MAX_RELOADS = 3;
 // overlay renders progress against.
 const STALL_MAX_ACTIONS = STALL_MAX_RELOADS * 2;
 
+// How often the video element's playback-quality counters are read. The decode window is 30s, so
+// this keeps ~15 points in it -- enough to survive pruning without sampling being noticeable.
+const DECODE_SAMPLE_INTERVAL = 2000;
+
+/** Hostname of whatever request an hls.js error refers to. Never the full URL: they carry tokens. */
+function hostnameOfFragment(data: any) {
+  const url = data?.frag?.url || data?.context?.url || data?.url;
+
+  if (typeof url !== 'string') {
+    return undefined;
+  }
+
+  try {
+    return new URL(url, window.location.href).hostname;
+  } catch (e) {
+    return url.match(/^(?:[a-z]+:)?\/\/([^/?#]+)/i)?.[1];
+  }
+}
+
 export type RecoveryState = {
   attempts: number;
   // The cap that applies to `attempts`, which differs between network and
@@ -96,6 +118,7 @@ export type MediaRef = {
   readonly videoElement: HTMLVideoElement | null;
   readonly hls: HLS | null;
   readonly recovery: RecoveryState;
+  readonly decodeHealth: DecodeHealth;
   currentTime: number;
   playbackRate: number;
   audioTracks?: AudioTrack[];
@@ -147,6 +170,14 @@ function useVideoPlayer({
   // aside without reading state it writes itself.
   const fatalRetryPendingRef = useRef(false);
   const currentAudioTrackIndexRef = useRef(0);
+  // Decode health is sampled continuously, not only while the diagnostics overlay is open, because
+  // the indicator it drives is the whole point: a viewer should not have to open diagnostics to
+  // learn the decoder is struggling.
+  const decodeSamplesRef = useRef<DecodeSample[]>([]);
+  const decodeErrorTimesRef = useRef<number[]>([]);
+  const decodeHealthRef = useRef<DecodeHealth>(EMPTY_DECODE_HEALTH);
+
+  const getDecodeHealth = useCallback(() => decodeHealthRef.current, []);
 
   // The overlay shows one line, so surface whichever path acted most recently.
   const getRecovery = useCallback(() => {
@@ -169,6 +200,10 @@ function useVideoPlayer({
   );
   const currentSourceTrackRef = useRef(currentSourceTrack);
   currentSourceTrackRef.current = currentSourceTrack;
+  // Read inside long-lived effects for issue reports. A ref rather than a dependency, so reporting
+  // context can never cause the HLS instance to be torn down and rebuilt.
+  const streamingTypeRef = useRef(streamingType);
+  streamingTypeRef.current = streamingType;
   const [currentSubtitleTrack, setCurrentSubtitleTrack] = useState<SubtitleTrack | null>(
     () => subtitleTracks?.find((subtitleTrack) => subtitleTrack.default) || null,
   );
@@ -302,6 +337,11 @@ function useVideoPlayer({
       fatalRecoveryRef.current = { attempts: 0, limit: RECOVERY_MAX_NETWORK_ATTEMPTS, exhausted: false };
       stallRecoveryRef.current = { attempts: 0, limit: STALL_MAX_ACTIONS, exhausted: false };
       fatalRetryPendingRef.current = false;
+      decodeSamplesRef.current = [];
+      decodeErrorTimesRef.current = [];
+      decodeHealthRef.current = EMPTY_DECODE_HEALTH;
+      // A new source is a new playback session, so each issue is worth reporting once more.
+      resetPlaybackIssueReports();
 
       if (isHLSJSActive !== false && currentSrc.includes('.m3u8') && HLS.isSupported()) {
         const hls = (hlsRef.current = new HLS({
@@ -331,6 +371,13 @@ function useVideoPlayer({
         });
 
         hls.on(HLS.Events.ERROR, (_event, data: any) => {
+          // Decode failures count towards the health indicator whether or not they are fatal.
+          // Non-fatal ones matter most: hls.js absorbs them silently, so without this nothing
+          // surfaces a decoder that is quietly rejecting data.
+          if (getFailureCategory(data) === 'media') {
+            decodeErrorTimesRef.current = pruneTimestamps([...decodeErrorTimesRef.current, Date.now()], Date.now());
+          }
+
           // hls.js retries non-fatal errors internally; only fatal ones stop
           // the loading engine and need the application to restart it.
           if (!data?.fatal) {
@@ -352,6 +399,17 @@ function useVideoPlayer({
                 lastReason: reason,
                 lastAt: Date.now(),
               };
+              logPlaybackIssue('fatal-network-recovery-exhausted', {
+                reason,
+                host: hostnameOfFragment(data),
+                attempts: RECOVERY_MAX_NETWORK_ATTEMPTS,
+                limit: RECOVERY_MAX_NETWORK_ATTEMPTS,
+                quality: currentSourceTrackRef.current?.name,
+                streamingType: streamingTypeRef.current,
+                levelCount: hls.levels?.length,
+                currentLevel: hls.currentLevel,
+                bandwidthEstimate: (hls as any).bandwidthEstimate,
+              });
               return;
             }
 
@@ -387,6 +445,15 @@ function useVideoPlayer({
                 lastReason: reason,
                 lastAt: Date.now(),
               };
+              logPlaybackIssue('fatal-media-recovery-exhausted', {
+                reason,
+                attempts: RECOVERY_MAX_MEDIA_ATTEMPTS,
+                limit: RECOVERY_MAX_MEDIA_ATTEMPTS,
+                quality: currentSourceTrackRef.current?.name,
+                streamingType: streamingTypeRef.current,
+                levelCount: hls.levels?.length,
+                currentLevel: hls.currentLevel,
+              });
               return;
             }
 
@@ -413,6 +480,12 @@ function useVideoPlayer({
           // Key-system, mux and other fatal errors have no documented in-place
           // recovery path, so record them instead of retrying blindly.
           fatalRecoveryRef.current = { ...fatalRecoveryRef.current, exhausted: true, lastReason: reason, lastAt: Date.now() };
+          logPlaybackIssue('fatal-unrecoverable', {
+            reason,
+            host: hostnameOfFragment(data),
+            quality: currentSourceTrackRef.current?.name,
+            streamingType: streamingTypeRef.current,
+          });
         });
         hls.on(HLS.Events.MANIFEST_PARSED, () => {
           const isAdaptive = hls.levels.length > 1;
@@ -570,6 +643,11 @@ function useVideoPlayer({
       }
 
       if (reloads >= STALL_MAX_RELOADS) {
+        logPlaybackIssue('stall-watchdog-exhausted', {
+          reason: 'stall / reload budget spent',
+          attempts: actions,
+          limit: STALL_MAX_ACTIONS,
+        });
         stallRecoveryRef.current = {
           attempts: actions,
           limit: STALL_MAX_ACTIONS,
@@ -596,6 +674,63 @@ function useVideoPlayer({
       hls.loadSource(currentSrc);
       hls.startLoad(position);
     }, STALL_CHECK_INTERVAL);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [currentSrc]);
+
+  // Decode-health sampling. Reads the element's cumulative playback-quality counters on a timer;
+  // `evaluateDecodeHealth` turns consecutive readings into a sliding-window dropped-frame ratio.
+  useEffect(() => {
+    if (!currentSrc) {
+      return;
+    }
+
+    const intervalId = setInterval(() => {
+      const video = videoRef.current;
+
+      if (!video) {
+        return;
+      }
+
+      const getQuality = (
+        video as HTMLVideoElement & {
+          getVideoPlaybackQuality?: () => { totalVideoFrames?: number; droppedVideoFrames?: number };
+        }
+      ).getVideoPlaybackQuality;
+      const now = Date.now();
+
+      // Older webOS firmware may not implement it; the error count alone still drives the
+      // indicator there.
+      if (getQuality) {
+        const quality = getQuality.call(video);
+        const totalVideoFrames = quality?.totalVideoFrames;
+        const droppedVideoFrames = quality?.droppedVideoFrames;
+
+        if (typeof totalVideoFrames === 'number' && typeof droppedVideoFrames === 'number') {
+          // Paused playback renders nothing, so sampling through it would stretch the window over
+          // a gap where the ratio means nothing.
+          if (!video.paused) {
+            decodeSamplesRef.current = pruneSamples([...decodeSamplesRef.current, { at: now, totalVideoFrames, droppedVideoFrames }], now);
+          }
+        }
+      }
+
+      decodeErrorTimesRef.current = pruneTimestamps(decodeErrorTimesRef.current, now);
+      decodeHealthRef.current = evaluateDecodeHealth(decodeSamplesRef.current, decodeErrorTimesRef.current, now);
+
+      if (decodeHealthRef.current.severity === 'severe') {
+        logPlaybackIssue('decode-health-severe', {
+          droppedRatio: Number(decodeHealthRef.current.droppedRatio.toFixed(4)),
+          decodeErrors: decodeHealthRef.current.decodeErrors,
+          quality: currentSourceTrackRef.current?.name,
+          streamingType: streamingTypeRef.current,
+          levelCount: hlsRef.current?.levels?.length,
+          currentLevel: hlsRef.current?.currentLevel,
+        });
+      }
+    }, DECODE_SAMPLE_INTERVAL);
 
     return () => {
       clearInterval(intervalId);
@@ -670,6 +805,7 @@ function useVideoPlayer({
       videoRef,
       hlsRef,
       getRecovery,
+      getDecodeHealth,
       getAudioTracks,
       getAudioTrack,
       setAudioTrack,
@@ -684,6 +820,7 @@ function useVideoPlayer({
       videoRef,
       hlsRef,
       getRecovery,
+      getDecodeHealth,
       getAudioTracks,
       getAudioTrack,
       setAudioTrack,
@@ -795,6 +932,9 @@ function useVideoPlayerApi(ref: React.ForwardedRef<MediaRef>, props: OwnProps) {
       },
       get hls() {
         return player.hlsRef.current;
+      },
+      get decodeHealth() {
+        return player.getDecodeHealth();
       },
       get recovery() {
         return player.getRecovery();

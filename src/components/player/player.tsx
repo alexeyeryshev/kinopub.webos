@@ -11,10 +11,13 @@ import Text from 'components/text';
 import useButtonEffect from 'hooks/useButtonEffect';
 import useStorageState from 'hooks/useStorageState';
 
+import DecodeHealthIndicator from './decodeHealthIndicator';
 import { getVideoNode } from './getVideoNode';
 import PlaybackDiagnosticsOverlay from './playbackDiagnostics';
 import Settings from './settings';
 import StartFrom from './startFrom';
+
+import { DecodeHealth } from 'utils/decodeHealth';
 
 export type PlayerProps = {
   title: string;
@@ -62,6 +65,7 @@ const Player: React.FC<PlayerProps> = ({
   const [isEpisodesOpen, setIsEpisodesOpen] = useState(false);
   const [isDiagnosticsVisible, setIsDiagnosticsVisible] = useState(false);
   const [isDiagnosticsExportVisible, setIsDiagnosticsExportVisible] = useState(false);
+  const [decodeHealth, setDecodeHealth] = useState<DecodeHealth>();
   const [controlsVisible, setControlsVisible] = useState(true);
   const [isPauseByOKClickActive] = useStorageState<boolean>('is_pause_by_ok_click_active');
   const [subtitleOpacity] = useStorageState<number>('subtitle_opacity', 1);
@@ -212,6 +216,24 @@ const Player: React.FC<PlayerProps> = ({
     };
   }, [timeSyncInterval, onTimeSync, handleTimeSync]);
 
+  useEffect(() => {
+    const intervalId = setInterval(() => {
+      const next = getVideoNode(playerRef.current)?.decodeHealth;
+
+      // Re-render only when something a viewer would see actually changed, so a healthy stream
+      // does not re-render the player every two seconds for nothing.
+      setDecodeHealth((current) =>
+        current?.severity === next?.severity && current?.droppedRatio === next?.droppedRatio && current?.decodeErrors === next?.decodeErrors
+          ? current
+          : next,
+      );
+    }, 2000);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [playerRef]);
+
   useButtonEffect('Back', handleTimeSync);
   useButtonEffect('Blue', handleSettingsOpen);
   useButtonEffect('Play', handleSettingsClose);
@@ -236,6 +258,7 @@ const Player: React.FC<PlayerProps> = ({
         onExportToggle={handleDiagnosticsExportToggle}
         player={playerRef}
       />
+      <DecodeHealthIndicator health={decodeHealth} hidden={isDiagnosticsVisible || isDiagnosticsExportVisible} />
       {controlsVisible && (
         <div className="absolute z-10 top-0 px-4 pt-2 flex items-center">
           <BackButton className="mr-2" />
