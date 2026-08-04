@@ -56,13 +56,15 @@ every anonymous visitor's playback errors were charged to a project meant for on
 television. A public ingest endpoint that nothing depends on is cost without
 benefit.
 
-`netlify.toml` at the repository root is inherited from upstream and is inert
-unless someone connects the repository to a Netlify account. It would publish the
-same bundle with the same consequence, so treat it as decommissioned too rather
-than as a supported deployment path.
+An inherited `netlify.toml` was removed for the same reason. It was inert unless
+someone connected the repository to a Netlify account, but it would have
+published the same bundle with the same consequence, and a loaded configuration
+nobody uses is worse than no configuration at all.
 
-If a web build is ever wanted again, gate the Sentry initialisation in
-`src/utils/logging.ts` on the webOS runtime first, so only the TV app reports.
+A web build is still wanted eventually, as a way to reproduce playback problems
+somewhere with real developer tools — see the roadmap. It needs the Sentry
+initialisation in `src/utils/logging.ts` gated on the webOS runtime first, so
+only the TV app reports.
 
 ## `release.yml` — packages attached to a release
 

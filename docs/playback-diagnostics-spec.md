@@ -486,6 +486,38 @@ would tell the same story twice and spend twice the quota. The stream context th
 The state machine is in `src/utils/playbackEpisode.ts` with unit tests; `sentryEpisodeSink` in
 `src/utils/logging.ts` is the only part that touches Sentry.
 
+### Backend failures
+
+Playback is not the only thing that breaks, and for a while it was the only thing that reported.
+`src/api/base.ts` caught every failure and returned `{ error }`, so a backend that was down, an
+error page from something in front of the API, and a genuine empty result were indistinguishable —
+with the HTTP status already discarded. The API client now reports three kinds:
+
+| Kind          | Meaning                                                                  |
+| ------------- | ------------------------------------------------------------------------ |
+| `unreachable` | The request never completed — no route, DNS failure, connection dropped. |
+| `http`        | An unsuccessful status.                                                  |
+| `malformed`   | Answered, but not with JSON.                                             |
+
+The return contract is deliberately unchanged — the parsed body on any answer, `{ error }` when
+something threw — because callers depend on it; the OAuth device flow reads `response.error` to
+decide whether pairing is still pending. Reporting sits beside the existing behaviour rather than
+reshaping it.
+
+Two exemptions, both for responses that are normal rather than faulty: **401**, which is a token
+expiring on schedule, and **unsuccessful statuses from the OAuth device flow**, which polls every
+ten seconds and expects them until the user confirms on another device. Transport failures on those
+requests are still reported — the endpoint being unreachable is a fault whoever it belongs to.
+
+What reaches Sentry is the normalised path, method and status: query strings are stripped, since
+every authenticated request carries `access_token` there, and numeric path segments become `{id}`,
+so one broken endpoint is one group rather than thousands of tags that could be used to reconstruct
+what somebody watched. One report per endpoint per kind per session, on the same reasoning as
+`logPlaybackIssue`. A 5xx is recorded at `error` level; everything else is a warning. The rules are
+in `src/utils/apiFailures.ts` with unit tests, because both of the ones that matter fail silently —
+a leaked token is not visible from inside, and a reporting flood is only noticed once the quota is
+gone.
+
 ### What leaves the TV, and where it goes
 
 Sentry is the only telemetry destination. That is a deliberate narrowing, not an accident of what

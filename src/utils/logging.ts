@@ -1,6 +1,7 @@
 import * as Sentry from '@sentry/browser';
 import { Integrations as TracingIntegrations } from '@sentry/tracing';
 
+import { ApiFailure, apiFailureKey, describeApiFailure, isServerFault, normalizeEndpoint } from 'utils/apiFailures';
 import { APP_VERSION } from 'utils/app';
 import { EpisodeSink, EpisodeSummary } from 'utils/playbackEpisode';
 
@@ -142,6 +143,52 @@ export function logPlaybackIssue(issue: PlaybackIssue, context: PlaybackIssueCon
     scope.setLevel(Sentry.Severity.Warning);
 
     Sentry.captureMessage(`playback: ${issue}`);
+  });
+}
+
+/**
+ * Backend failures, one report per endpoint per kind per session.
+ *
+ * The complaint this exists to answer is "the app was weird last night", which the playback
+ * pipeline cannot explain when the cause was the service behind it. What reaches Sentry is the
+ * normalised path, the method and the status — never the query string, which carries `access_token`
+ * on every authenticated request. `normalizeEndpoint` strips it here rather than trusting callers.
+ */
+const reportedApiFailures = new Set<string>();
+
+export function logApiFailure(failure: ApiFailure) {
+  const key = apiFailureKey(failure);
+
+  if (reportedApiFailures.has(key)) {
+    return;
+  }
+
+  reportedApiFailures.add(key);
+
+  const endpoint = normalizeEndpoint(failure.endpoint);
+
+  Sentry.withScope((scope) => {
+    scope.setTag('api_failure', failure.kind);
+    scope.setTag('api_endpoint', endpoint);
+    scope.setTag('api_method', failure.method);
+
+    if (failure.status !== undefined) {
+      scope.setTag('api_status', String(failure.status));
+    }
+
+    scope.setContext(
+      'api',
+      scrubUrls({
+        kind: failure.kind,
+        endpoint,
+        method: failure.method,
+        status: failure.status,
+        reason: failure.reason,
+      }),
+    );
+    scope.setLevel(isServerFault(failure) ? Sentry.Severity.Error : Sentry.Severity.Warning);
+
+    Sentry.captureMessage(describeApiFailure(failure));
   });
 }
 

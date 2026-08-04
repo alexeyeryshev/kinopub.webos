@@ -1,6 +1,9 @@
 import isArray from 'lodash/isArray';
 import { serialize } from 'object-to-formdata';
 
+import { shouldReportHttpStatus } from 'utils/apiFailures';
+import { logApiFailure } from 'utils/logging';
+
 type Primitive = string | number | boolean;
 
 type Param = Primitive | null | undefined | Param[] | { [key: string]: Param };
@@ -43,30 +46,62 @@ class BaseApiClient {
       : `http://${baseUrl}`;
   }
 
+  /**
+   * The return contract is deliberately unchanged: the parsed body on any answer, `{ error }` when
+   * something threw. Callers depend on that shape — the OAuth device flow reads `response.error` to
+   * decide whether pairing is still pending — so this reports failures *beside* the existing
+   * behaviour rather than reshaping it. Turning a non-2xx into a thrown error would be a larger
+   * change than it looks, since the backend answers some of them with a body the app uses.
+   */
   private async request<T>(method: 'GET' | 'POST', url: string, params?: Params, data?: Params) {
     const accessToken = this.getAccessToken();
+    // The OAuth token endpoints are the one place an unsuccessful status is routine rather than a
+    // fault; see `shouldReportHttpStatus`. This is the same predicate that decides not to attach an
+    // access token, because it identifies the same requests.
+    const isAuthorizationRequest = Boolean(params?.['grant_type']);
 
-    if (accessToken && !params?.['grant_type']) {
+    if (accessToken && !isAuthorizationRequest) {
       params = {
         ...params,
         access_token: accessToken,
       };
     }
 
+    let response: Response;
+
     try {
-      const response = await fetch(`${this.baseUrl}${url}?${normalizeParams(params)}`, {
+      response = await fetch(`${this.baseUrl}${url}?${normalizeParams(params)}`, {
         method,
         body: data && serialize(data),
       });
+    } catch (ex) {
+      // Nothing came back at all. Worth reporting even for an authorization request: the endpoint
+      // being unreachable is a fault whoever it belongs to.
+      logApiFailure({ kind: 'unreachable', endpoint: url, method, reason: (ex as Error)?.message });
 
-      if (response.status === 401) {
-        this.clearTokens();
-      }
+      return {
+        error: (ex as Error).toString(),
+      } as unknown as T;
+    }
 
+    if (response.status === 401) {
+      this.clearTokens();
+    }
+
+    if (shouldReportHttpStatus(response.status, { isAuthorizationRequest })) {
+      logApiFailure({ kind: 'http', endpoint: url, method, status: response.status });
+    }
+
+    try {
       const json = await response.json();
 
       return json as T;
     } catch (ex) {
+      // Answered, but not with JSON. An HTML error page from something in front of the API is the
+      // usual cause, and until now it surfaced as an indistinguishable `{ error }` with the status
+      // already thrown away.
+      logApiFailure({ kind: 'malformed', endpoint: url, method, status: response.status, reason: (ex as Error)?.message });
+
       return {
         error: (ex as Error).toString(),
       } as unknown as T;
