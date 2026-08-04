@@ -155,6 +155,33 @@ Use this checklist on an LG webOS TV after installing a build that includes the 
   `media/decode` counter in `Failure Summary` moves by the same amount — the two read the same
   categorisation and must agree.
 
+## Playback Failure Notice
+
+- Reproduce a segment the CDN refuses and let the failure run all the way out — roughly a minute for
+  the fatal-error budget, then the watchdog's three playlist reloads.
+- Confirm nothing appears while `recovery:` in `Failure Summary` still shows `retry N/6` or the
+  watchdog is still counting: a notice during a recovery that might still work is a bug.
+- Reproduce the other shape too — a stall that produces only non-fatal errors, where hls.js never
+  escalates and the watchdog is the only thing recovering. The notice must still appear once the
+  watchdog gives up. This is the failure the watchdog exists for, and a rule that also demanded a
+  spent fatal budget would never show anything here.
+- Once recovery reads `gave up …`, confirm a centred panel appears reading
+  `Воспроизведение остановлено`, with the reason underneath and a `Повторить` button.
+- Confirm the button is focused: press OK without moving the pointer and the retry must fire.
+- Confirm the arrow keys and OK behave normally everywhere else — the panel must not swallow presses
+  meant for the player.
+- Press `Повторить`. Playback must restart **from where it froze**, not from the beginning, and the
+  notice must disappear immediately rather than lingering until the next poll.
+- If the retry cannot succeed either, confirm the notice takes as long to come back as it did the
+  first time — roughly a minute of visible retries in `recovery:`, not a few seconds. Reappearing
+  almost immediately means the rebuilt pipeline inherited the previous attempt's spent watchdog
+  budget instead of getting a fresh one.
+- Open the settings popup, the episode picker, and the diagnostics overlay in turn while the notice
+  is up. Each must hide it, and closing them must bring it back.
+- Press Back with the notice on screen and confirm it leaves the player at once.
+- On a source played without HLS.js (`is_hls.js_active` off, or an `http` streaming type), confirm a
+  file the TV cannot decode shows `Телевизор не смог воспроизвести этот файл.` instead.
+
 ## Recovery Episodes In Sentry
 
 - Reproduce a stall, then let it run to completion rather than restarting playback.
@@ -168,6 +195,14 @@ Use this checklist on an LG webOS TV after installing a build that includes the 
 - For a recovered episode, confirm the `playback_recovered_after` tag names the action that came
   last — this is what says which recovery path works.
 - Confirm exactly one event is sent per episode, not one per error.
+- Stall a stream, then press Back while recovery is still running. Confirm an event arrives with
+  `playback_episode_ended_by: teardown` at `warning` level, carrying the breadcrumbs collected so
+  far. Nothing was reported for this case before, so an absent event is the regression.
+- Do the same but pick a different episode instead of pressing Back — the player remounts, so this
+  must also report `teardown`.
+- Let a failure run to the notice and press `Повторить`; confirm the episode closes as
+  `manual-retry`, and that whatever happens next is reported as its own episode rather than being
+  folded into the first.
 
 ## Privacy Check
 

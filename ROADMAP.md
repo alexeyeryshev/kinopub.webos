@@ -252,7 +252,21 @@ Ordered by priority, then by what unblocks what.
 
 ### A1 — Tell the viewer when playback has failed
 
-- **Status:** Open
+> **Implemented, validation incomplete.** `src/components/player/playbackFailureNotice.tsx` shows a
+> centred panel once every recovery path is spent, with the reason and a `Повторить` button that
+> rebuilds the media pipeline from the frozen position. The terminal state is derived in
+> `media.new.tsx` (`getFailure`): the stall watchdog must be exhausted, and the fatal budget too but
+> only if a fatal error ever engaged it — requiring both unconditionally would have excluded the
+> non-fatal CDN stall the watchdog exists for. It stays silent while anything is still being tried;
+> a source played without hls.js falls back to the media
+> element's own `error`, which is what closes the "`MediaRef.error` has no consumers" finding. Retry
+> rebuilds rather than restarts, via a nonce in the media effect's dependencies, because a fatal
+> hls.js error leaves the loading engine dead. See `docs/playback-diagnostics-spec.md` (Playback
+> Failure Notice). **Not yet exercised on a TV** — the focus behaviour, the Enact interaction, and
+> whether the retry resumes cleanly from the saved position are exactly what the manual checklist
+> now covers and nobody has run.
+
+- **Status:** Completed, validation incomplete
 - **Priority:** High
 - **Category:** Playback UX
 - **Origin:** Review §4.1; the unbuilt half of item 4's recovery work
@@ -288,7 +302,17 @@ Ordered by priority, then by what unblocks what.
 
 ### A2 — Report the recovery episode when the viewer leaves
 
-- **Status:** Open
+> **Implemented, validation incomplete.** An unmount-only effect in `media.new.tsx` closes any
+> in-flight episode as `teardown`. It is deliberately separate from the source effect, whose cleanup
+> also runs on every source change and therefore cannot tell a departure from a quality switch.
+> `EpisodeEnd` now records _how_ an episode ended — `progress`, `grace-period`, `source-change`,
+> `manual-retry`, `teardown` — carried to Sentry as `playback_episode_ended_by`, and only
+> `grace-period` is reported at `error` level, since the rest were ended deliberately by someone.
+> Four unit tests cover the new endings. **Still open:** whether the event is actually _delivered_
+> rather than merely queued when the view tears down, and what happens when the viewer exits the app
+> entirely (`window.close()` from `views.tsx:20`) rather than returning to the item screen.
+
+- **Status:** Completed, validation incomplete
 - **Priority:** High
 - **Category:** Error reporting
 - **Origin:** Review §4.2, §5

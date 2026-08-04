@@ -178,12 +178,21 @@ export const sentryEpisodeSink: EpisodeSink = {
         scope.setTag('playback_recovered_after', summary.recoveredAfter);
       }
 
+      // How the episode ended, not just whether it was lost. Filtering on this is what separates
+      // "the player ran out of options" from "the viewer stopped waiting", which are the same
+      // outcome and completely different facts.
+      scope.setTag('playback_episode_ended_by', summary.endedBy);
+
       scope.setContext('playback_episode', scrubUrls({ ...summary }));
-      scope.setLevel(summary.outcome === 'abandoned' ? Sentry.Severity.Error : Sentry.Severity.Warning);
+      // Only the player giving up on its own is an error. A viewer who leaves, or retries by hand,
+      // ended the episode deliberately -- worth recording, not worth paging over.
+      scope.setLevel(
+        summary.outcome === 'abandoned' && summary.endedBy === 'grace-period' ? Sentry.Severity.Error : Sentry.Severity.Warning,
+      );
 
       Sentry.captureMessage(
         summary.outcome === 'abandoned'
-          ? `playback: recovery abandoned after ${Math.round(summary.durationMs / 1000)}s`
+          ? `playback: recovery abandoned after ${Math.round(summary.durationMs / 1000)}s (${summary.endedBy})`
           : `playback: recovered after ${Math.round(summary.durationMs / 1000)}s via ${summary.recoveredAfter || 'retry'}`,
       );
     });

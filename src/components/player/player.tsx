@@ -6,7 +6,7 @@ import { Item, Season, Video } from 'api';
 import BackButton from 'components/backButton';
 import Button from 'components/button';
 import EpisodePicker from 'components/episodePicker';
-import Media, { AUTO_SOURCE_NAME, AudioTrack, SourceTrack, StreamingType, SubtitleTrack } from 'components/media';
+import Media, { AUTO_SOURCE_NAME, AudioTrack, PlaybackFailure, SourceTrack, StreamingType, SubtitleTrack } from 'components/media';
 import Text from 'components/text';
 import useButtonEffect from 'hooks/useButtonEffect';
 import useStorageState from 'hooks/useStorageState';
@@ -14,6 +14,7 @@ import useStorageState from 'hooks/useStorageState';
 import DecodeHealthIndicator from './decodeHealthIndicator';
 import { getVideoNode } from './getVideoNode';
 import PlaybackDiagnosticsOverlay from './playbackDiagnostics';
+import PlaybackFailureNotice from './playbackFailureNotice';
 import Settings from './settings';
 import StartFrom from './startFrom';
 
@@ -66,6 +67,7 @@ const Player: React.FC<PlayerProps> = ({
   const [isDiagnosticsVisible, setIsDiagnosticsVisible] = useState(false);
   const [isDiagnosticsExportVisible, setIsDiagnosticsExportVisible] = useState(false);
   const [decodeHealth, setDecodeHealth] = useState<DecodeHealth>();
+  const [failure, setFailure] = useState<PlaybackFailure>();
   const [controlsVisible, setControlsVisible] = useState(true);
   const [isPauseByOKClickActive] = useStorageState<boolean>('is_pause_by_ok_click_active');
   const [subtitleOpacity] = useStorageState<number>('subtitle_opacity', 1);
@@ -218,7 +220,8 @@ const Player: React.FC<PlayerProps> = ({
 
   useEffect(() => {
     const intervalId = setInterval(() => {
-      const next = getVideoNode(playerRef.current)?.decodeHealth;
+      const video = getVideoNode(playerRef.current);
+      const next = video?.decodeHealth;
 
       // Re-render only when something a viewer would see actually changed, so a healthy stream
       // does not re-render the player every two seconds for nothing.
@@ -227,12 +230,23 @@ const Player: React.FC<PlayerProps> = ({
           ? current
           : next,
       );
+
+      const nextFailure = video?.failure;
+
+      setFailure((current) => (current?.since === nextFailure?.since ? current : nextFailure));
     }, 2000);
 
     return () => {
       clearInterval(intervalId);
     };
   }, [playerRef]);
+
+  const handleRetry = useCallback(() => {
+    getVideoNode(playerRef.current)?.reload();
+    // Clear it here too rather than waiting up to two seconds for the next poll: the notice has to
+    // go the moment it is acted on, or the retry reads as if it did nothing.
+    setFailure(undefined);
+  }, []);
 
   useButtonEffect('Back', handleTimeSync);
   useButtonEffect('Blue', handleSettingsOpen);
@@ -259,6 +273,13 @@ const Player: React.FC<PlayerProps> = ({
         player={playerRef}
       />
       <DecodeHealthIndicator health={decodeHealth} hidden={isDiagnosticsVisible || isDiagnosticsExportVisible} />
+      <PlaybackFailureNotice
+        failure={failure}
+        // Anything that owns the screen outranks it: the state is terminal and will still be there
+        // when the viewer comes back, and stealing focus out from under a popup would be worse.
+        hidden={isDiagnosticsVisible || isDiagnosticsExportVisible || isSettingsOpen || isEpisodesOpen}
+        onRetry={handleRetry}
+      />
       {controlsVisible && (
         <div className="absolute z-10 top-0 px-4 pt-2 flex items-center">
           <BackButton className="mr-2" />

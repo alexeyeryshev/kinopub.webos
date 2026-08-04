@@ -97,6 +97,22 @@ export type RecoveryState = {
   lastAt?: number;
 };
 
+/**
+ * Playback is over and the player is not going to fix it.
+ *
+ * Deliberately narrow: this is the terminal state, not a report on every retry. While either
+ * recovery path still has budget there is a real chance of resuming, and saying so would be
+ * premature -- so this stays undefined until nothing is left to try.
+ */
+export type PlaybackFailure = {
+  /** `recovery-exhausted` for HLS, `media-error` for a source the element itself rejected. */
+  kind: 'recovery-exhausted' | 'media-error';
+  /** hls.js `type / details`, or a media-element error code. Never a URL. */
+  reason?: string;
+  /** When this failure was first observed, so the UI can render without flickering. */
+  since: number;
+};
+
 type OwnProps = {
   autoPlay?: boolean;
   audioTracks?: AudioTrack[];
@@ -116,9 +132,12 @@ export type MediaRef = {
   pause: () => void;
   playPause: () => Promise<void>;
   load: () => void;
+  /** Tears the media pipeline down and builds it again from the current position. */
+  reload: () => void;
   readonly videoElement: HTMLVideoElement | null;
   readonly hls: HLS | null;
   readonly recovery: RecoveryState;
+  readonly failure: PlaybackFailure | undefined;
   readonly decodeHealth: DecodeHealth;
   currentTime: number;
   playbackRate: number;
@@ -182,7 +201,77 @@ function useVideoPlayer({
   // without anyone having to be watching at the right moment.
   const episodeRef = useRef(createPlaybackEpisodeTracker(sentryEpisodeSink));
 
+  // Bumped to rebuild the media pipeline in place. A fatal hls.js error leaves the loading engine
+  // stopped for good, so a retry has to construct a new instance rather than restart the dead one.
+  const [reloadNonce, setReloadNonce] = useState(0);
+  const failureRef = useRef<PlaybackFailure | undefined>();
+  // Whether the current source is being played through hls.js, which decides how a failure is
+  // recognised. Not `hlsRef.current !== null`: that goes briefly null while an instance is being
+  // replaced, and `destroy()` detaching the media element can leave a transient `video.error`
+  // behind -- long enough for a poll to land on it and announce a failure that is not happening.
+  const usesHlsRef = useRef(false);
+
   const getDecodeHealth = useCallback(() => decodeHealthRef.current, []);
+
+  /**
+   * The terminal state, or undefined while there is still something to try.
+   *
+   * "Every recovery path is spent" has to mean every path that *applies*, not every path that
+   * exists. The two are not the same, and requiring both budgets would have excluded the failure
+   * this player was built for: a CDN edge refusing specific segments produces only non-fatal errors,
+   * so hls.js never escalates, the fatal budget is never touched, and the stall watchdog is the only
+   * thing recovering. Demanding a spent fatal budget there would leave the viewer on the same silent
+   * frozen frame the notice exists to replace.
+   *
+   * So the watchdog must be spent -- it engages on any stall, whatever caused it -- and the fatal
+   * budget only has to be spent if a fatal error ever engaged it. A fatal retry still in flight
+   * means there is a real chance of resuming, and saying playback has failed over the top of that
+   * would be worse than saying nothing.
+   *
+   * For a source played without hls.js there is no budget at all, and the element's own error is the
+   * whole story.
+   */
+  const getFailure = useCallback(() => {
+    const pending = (() => {
+      if (usesHlsRef.current) {
+        const fatal = fatalRecoveryRef.current;
+        const stall = stallRecoveryRef.current;
+        const fatalEngaged = fatal.attempts > 0 || fatal.exhausted;
+
+        return stall.exhausted && (!fatalEngaged || fatal.exhausted)
+          ? // Prefer the fatal reason when there is one: `networkError / fragLoadError` says what
+            // broke, while the watchdog's `stall / reload` only says how we noticed.
+            { kind: 'recovery-exhausted' as const, reason: fatal.lastReason || stall.lastReason }
+          : undefined;
+      }
+
+      const error = videoRef.current?.error;
+
+      return error ? { kind: 'media-error' as const, reason: `code ${error.code}` } : undefined;
+    })();
+
+    if (!pending) {
+      failureRef.current = undefined;
+
+      return undefined;
+    }
+
+    // Keep `since` stable while the same failure persists, so the notice does not remount under a
+    // viewer who is reaching for the retry button.
+    if (failureRef.current?.kind !== pending.kind || failureRef.current?.reason !== pending.reason) {
+      failureRef.current = { ...pending, since: Date.now() };
+    }
+
+    return failureRef.current;
+  }, []);
+
+  const reload = useCallback(() => {
+    // Closed here rather than left to the effect below, so the report says the viewer asked for
+    // this instead of blaming a source change that did not happen.
+    episodeRef.current.reset(Date.now(), 'manual-retry');
+    failureRef.current = undefined;
+    setReloadNonce((nonce) => nonce + 1);
+  }, []);
 
   // The overlay shows one line, so surface whichever path acted most recently.
   const getRecovery = useCallback(() => {
@@ -345,11 +434,14 @@ function useVideoPlayer({
       decodeSamplesRef.current = [];
       decodeErrorTimesRef.current = [];
       decodeHealthRef.current = EMPTY_DECODE_HEALTH;
+      failureRef.current = undefined;
       // A new source is a new playback session, so each issue is worth reporting once more.
       resetPlaybackIssueReports();
       episodeRef.current.reset(Date.now());
 
-      if (isHLSJSActive !== false && currentSrc.includes('.m3u8') && HLS.isSupported()) {
+      usesHlsRef.current = isHLSJSActive !== false && currentSrc.includes('.m3u8') && HLS.isSupported();
+
+      if (usesHlsRef.current) {
         const hls = (hlsRef.current = new HLS({
           enableWebVTT: false,
           enableCEA708Captions: false,
@@ -560,7 +652,24 @@ function useVideoPlayer({
         hlsRef.current = null;
       }
     };
-  }, [currentSrc, isHLSJSActive, handleMediaLoaded]);
+  }, [currentSrc, isHLSJSActive, handleMediaLoaded, reloadNonce]);
+
+  /**
+   * Reports a recovery episode that was still in flight when the player went away.
+   *
+   * Separate from the effect above on purpose: that one's cleanup also runs on every source change,
+   * where the episode is closed by `reset()` in its body and the ending is a source change rather
+   * than a departure. An empty dependency list is the only way to learn that this is really an
+   * unmount -- the viewer pressed Back, or `views/video` remounted the player for another episode.
+   * Without it the most common ending of a failed playback was never reported at all.
+   */
+  useEffect(() => {
+    const episode = episodeRef.current;
+
+    return () => {
+      episode.reset(Date.now(), 'teardown');
+    };
+  }, []);
 
   // Stall watchdog. Covers the failures that never surface as a fatal error:
   // playback sits at the end of the buffer while hls.js retries segments that
@@ -696,7 +805,13 @@ function useVideoPlayer({
     return () => {
       clearInterval(intervalId);
     };
-  }, [currentSrc]);
+    // `reloadNonce` matters as much as `currentSrc` here. All of this watchdog's state -- how long
+    // the stall has run, how many reloads are left -- lives in closure variables, so a rebuilt
+    // pipeline that kept the old closure would inherit a spent reload budget and a `stalledSince`
+    // from minutes ago. The first tick after a manual retry would then see a huge stall against an
+    // exhausted budget and declare the fresh attempt dead within seconds, before it had finished
+    // loading its manifest. Re-running the effect is what gives the retry a clean watchdog.
+  }, [currentSrc, reloadNonce]);
 
   // Decode-health sampling. Reads the element's cumulative playback-quality counters on a timer;
   // `evaluateDecodeHealth` turns consecutive readings into a sliding-window dropped-frame ratio.
@@ -823,6 +938,8 @@ function useVideoPlayer({
       videoRef,
       hlsRef,
       getRecovery,
+      getFailure,
+      reload,
       getDecodeHealth,
       getAudioTracks,
       getAudioTrack,
@@ -838,6 +955,8 @@ function useVideoPlayer({
       videoRef,
       hlsRef,
       getRecovery,
+      getFailure,
+      reload,
       getDecodeHealth,
       getAudioTracks,
       getAudioTrack,
@@ -957,6 +1076,10 @@ function useVideoPlayerApi(ref: React.ForwardedRef<MediaRef>, props: OwnProps) {
       get recovery() {
         return player.getRecovery();
       },
+      get failure() {
+        return player.getFailure();
+      },
+      reload: player.reload,
       get currentTime() {
         return getCurrentTime();
       },
