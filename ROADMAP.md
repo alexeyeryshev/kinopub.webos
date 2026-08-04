@@ -375,7 +375,32 @@ Ordered by priority, then by what unblocks what.
 
 ### A4 — Decide what telemetry this fork sends, and where
 
-- **Status:** Open
+> **Decided and implemented.** All three sub-decisions were made by the repository owner:
+>
+> 1. **The GA tag is gone entirely**, not repointed. Sentry already covers what it collected:
+>    `@sentry/tracing`'s `BrowserTracing` records CLS, LCP, FID, FCP and TTFB as pageload
+>    measurements (`node_modules/@sentry/tracing/dist/browser/metrics.js`), the same five metrics the
+>    GA callback forwarded, into a project this fork owns. On the TV the tag collected little
+>    besides: the app is not served over http, which is what makes `IS_WEB` false and selects
+>    `MemoryRouter`, so no page view after the first was ever recorded. Removed with it:
+>    `src/utils/analytics.ts`, `src/reportWebVitals.ts`, the `web-vitals` dependency and the
+>    `@types/gtag.js` types. Nothing is left that could hit the `ReferenceError` the earlier review
+>    of this item flagged, because no `gtag` reference survives.
+> 2. **The Pages deployment is removed** — `deploy-pages.yml` deleted. It was unused, and publishing
+>    a bundle carrying this fork's Sentry DSN meant anonymous visitors' errors were charged to a
+>    project meant for one television. Decommissioning the already-published `gh-pages` branch and
+>    turning Pages off in repository settings is a manual step for the owner; the workflow removal
+>    only stops new deployments.
+> 3. **No Sentry runtime gate is needed**, since the web surface is going away. `docs/ci.md` records
+>    that gating comes first if a web build is ever wanted again.
+>
+> **Still flagged, not actioned:** `netlify.toml` at the repository root is a second, inherited
+> deployment config with the same consequence. It is inert unless someone connects the repository to
+> a Netlify account, so it was left in place rather than removed unasked — but it is documented as
+> decommissioned in `docs/ci.md`, and deleting it would be tidier than leaving a loaded config lying
+> around.
+
+- **Status:** Completed
 - **Priority:** High
 - **Category:** Privacy / configuration
 - **Origin:** Review §4.9, §4.13

@@ -1,8 +1,8 @@
 # Continuous integration workflows
 
-This fork uses GitHub Actions for checks on pull requests, for the GitHub Pages
-deployment, and for publishing installable packages. This document describes what
-each workflow does and how to reproduce its checks locally.
+This fork uses GitHub Actions for checks on pull requests and for publishing
+installable packages. This document describes what each workflow does and how to
+reproduce its checks locally.
 
 > This repository is a fork. GitHub disables Actions on new forks by default, so
 > the workflows below only run after Actions is enabled once under
@@ -47,10 +47,22 @@ Notes:
 - Packages are uploaded as the `ipk-packages` artifact and kept for 14 days, so a
   build from a pull request can be installed on a TV without building locally.
 
-## `deploy-pages.yml` — GitHub Pages
+## No public web deployment
 
-Builds `master` and publishes `build/` to the `gh-pages` branch. Deployments are
-serialized, so a running deployment is never cancelled by a newer one.
+There is deliberately no workflow that publishes the built app to the web. One
+existed (`deploy-pages.yml`, building `master` to the `gh-pages` branch) and was
+removed: nobody used it, and the built bundle carries this fork's Sentry DSN, so
+every anonymous visitor's playback errors were charged to a project meant for one
+television. A public ingest endpoint that nothing depends on is cost without
+benefit.
+
+`netlify.toml` at the repository root is inherited from upstream and is inert
+unless someone connects the repository to a Netlify account. It would publish the
+same bundle with the same consequence, so treat it as decommissioned too rather
+than as a supported deployment path.
+
+If a web build is ever wanted again, gate the Sentry initialisation in
+`src/utils/logging.ts` on the webOS runtime first, so only the TV app reports.
 
 ## `release.yml` — packages attached to a release
 
