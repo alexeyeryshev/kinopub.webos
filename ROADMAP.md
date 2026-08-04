@@ -374,8 +374,15 @@ Ordered by priority, then by what unblocks what.
   consider gating Sentry initialisation on the webOS runtime so only the TV app reports. Whichever is
   chosen, record the reasoning in the spec so the next reader does not have to re-derive it.
 - **Dependencies and sequencing:** None. Do before drawing conclusions from Sentry volume.
-- **Compatibility risks:** None from removal; `gtag?.()` is already optional-called
-  (`analytics.ts:6`), so `sendWebVitalsToGoogleAnalytics` no-ops without the tag.
+- **Compatibility risks:** Removing the inline script alone would break the app at runtime. `gtag` is
+  declared only by that script (`public/index.html:12`), and optional chaining does not protect
+  against an _undeclared_ identifier — `gtag?.(…)` at `analytics.ts:6` would throw
+  `ReferenceError: gtag is not defined` rather than no-op. `src/index.tsx:35` still passes
+  `sendWebVitalsToGoogleAnalytics` to `reportWebVitals` unconditionally, and
+  `src/reportWebVitals.ts:4-11` registers it with five `web-vitals` callbacks, so the throw would
+  land on real metric events. TypeScript will not catch it: `@types/gtag.js` declares the global.
+  Remove the callback and its wiring together with the tag, or guard with
+  `typeof gtag !== 'undefined'`.
 - **Confidence:** code — high. Whether the Pages deployment is wanted is the owner's call, not a
   defect.
 - **Validation and acceptance criteria:** Load the built app with the network panel open and confirm
@@ -519,24 +526,27 @@ Ordered by priority, then by what unblocks what.
   fail. During a network failure, which is when a viewer most wants to leave.
 - **Concrete evidence:** `grep -rn "AbortController\|timeout" src/api/` returns nothing.
   `src/utils/keyboard.ts:51-61` iterates all matching handlers and `await`s each, breaking only on an
-  explicit `false`; registration prepends (`:72`). On Back the chain is `handleDiagnosticsClose`
-  (`player.tsx:243`), then `handleTimeSync` (`:237`, awaiting `watchingMarkTimeAsync`), then
-  `containers/views/views.tsx:54` → `history.goBack()`.
+  explicit `false`; registration prepends (`:72`), so the most recent registrant runs first. On Back
+  the chain is `handleDiagnosticsClose` (`player.tsx:243`), then `handleTimeSync` (`:237`, awaiting
+  `watchingMarkTimeAsync`), then `containers/views/views.tsx:54` → `history.goBack()`. That order is
+  an accident of mount timing rather than an invariant — see §4.11 for why, and for how
+  re-registration can reorder it.
 - **Motivation and expected benefit:** Makes the app escapable in the one state where it currently is
   not, and makes every API call fail in bounded time.
 - **Proposed direction:** Add an `AbortController` timeout in `src/api/base.ts`, and do not await the
-  progress sync on the Back path — fire it and let navigation proceed. While there, document the
-  handler-ordering contract in `utils/keyboard.ts`; it is load-bearing, depends on React's
-  child-first effect order, and is written down nowhere.
+  progress sync on the Back path — fire it and let navigation proceed. Do **not** simply document the
+  handler ordering: it is load-bearing but emergent, falling out of which component happened to mount
+  last and re-shuffling whenever a handler identity changes, so writing it down would enshrine an
+  accident. Give `registerButtonHandler` an explicit priority (or an ordered insert) so the contract
+  is stated rather than inferred.
 - **Dependencies and sequencing:** Pairs with **A3**; the timeout gives it something to report.
 - **Compatibility risks:** `AbortController` is Chrome 66 and the target is `chrome 35`; `core-js`
   does not polyfill DOM APIs, so it needs a `typeof` guard exactly like `CompressionStream`
   (`diagnosticsExport.ts:277-286`). A `Promise.race` timeout is the guard-free fallback, though it
   leaves the request running.
-- **Confidence:** code — high on the mechanism. The ordering claim follows from React's effect order
-  and should be confirmed with a log line before the handler stack is rewritten around it. How long
-  webOS's `fetch` takes to abandon a hung connection is unknown, and that number decides whether this
-  is an annoyance or a hang.
+- **Confidence:** code — high on the mechanism and on the ordering. How long webOS's `fetch` takes to
+  abandon a hung connection is unknown, and that number decides whether this is an annoyance or a
+  hang.
 - **Validation and acceptance criteria:** With the network dropped mid-playback, Back leaves the
   player without a perceptible delay; a request against an unreachable host fails within the timeout.
 - **Estimated scope:** Small.

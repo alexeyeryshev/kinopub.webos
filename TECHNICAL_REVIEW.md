@@ -85,9 +85,9 @@ single namespaced `localStorage` blob in `src/storage.ts` with a subscribe/notif
 
 **Remote-key handling** is a single global `keydown` listener with a manually ordered handler stack
 (`src/utils/keyboard.ts:37-77`). Handlers are _prepended_ on registration, and the listener
-`await`s each matching handler in sequence, breaking only when one returns `false`. Because React
-runs child effects before parent effects, the outermost registrant (`containers/views`) ends up last
-in the chain. This ordering is load-bearing and undocumented; see §4.11.
+`await`s each matching handler in sequence, breaking only when one returns `false`. The resulting
+order is an accident of mount timing, not an invariant: the last component to register runs first,
+and any handler that re-registers jumps back to the front. It is load-bearing anyway; see §4.11.
 
 **Four independent timers** run during playback: the stall watchdog (2 s,
 `media.new.tsx:597`), decode sampling (2 s, `media.new.tsx:708`), the decode-badge poll (2 s,
@@ -330,7 +330,7 @@ deadline.
 
 That interacts badly with the remote-key stack. `src/utils/keyboard.ts:51-61` iterates **all**
 matching handlers and `await`s each one, breaking only on an explicit `false`. Registration prepends
-(`:72`), and React runs child effects before parent effects, so the ordering on Back is:
+(`:72`), so the most recent registrant runs first, and the ordering on Back is:
 
 1. `player.tsx:243` → `handleDiagnosticsClose` (returns `false` and stops the chain only when an
    overlay is open);
@@ -341,11 +341,26 @@ matching handlers and `await`s each one, breaking only on an explicit `false`. R
 So leaving the player waits for a network round trip to complete or fail, with no bound on how long
 that takes — during a network failure, which is when a viewer is most likely to press Back.
 
-**Confidence: high on the code path, unverified on device.** How long webOS's `fetch` takes to give
-up on a hung connection is not established here, and that number decides whether this is an
-annoyance or a hang. It is also possible that `Views` mounts before `Player` in a way that reorders
-this; the ordering claim follows from React's child-first effect order and should be confirmed with
-a log line before anyone rewrites the handler stack around it.
+**Why that ordering holds is worth being precise about, because the obvious explanation is wrong.**
+It does not follow from React running child effects before parent effects — within a single commit
+that rule plus prepending would put the _parent_ first, which is the opposite of what happens
+between `Views` and `Player`. The real mechanism is mount timing across commits: `Views` calls
+`useButtonEffect` at `views.tsx:54`, above its `showSpinner` early return (`:57-59`), so it registers
+in the first commit while it is still rendering a spinner and stays mounted; `Player` mounts much
+later and prepends in front of it. Inside `Player`, `handleTimeSync` (`:237`) and
+`handleDiagnosticsClose` (`:243`) register in declaration order in the same commit, so the later one
+ends up first.
+
+That makes the order an emergent property rather than an invariant, and a fragile one:
+`useButtonEffect` re-registers whenever the handler identity changes (`useButtonEffect.ts:8-10`), and
+re-registration prepends again. `Views`'s `handleBackButtonClick` depends on `[history, showNotice]`
+(`views.tsx:28`), so a change there would move it to the front of the chain, ahead of the player's
+handlers. Nothing in the current flow appears to trigger that while `Player` is mounted, but nothing
+prevents it either.
+
+**Confidence: high on the code path and on the mechanism, unverified on device.** How long webOS's
+`fetch` takes to give up on a hung connection is not established here, and that number decides
+whether this is an annoyance or a hang.
 
 ### 4.12 No React error boundary — Medium
 
