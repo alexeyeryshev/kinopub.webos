@@ -65,9 +65,11 @@ const STALL_MIN_BUFFER_AHEAD = 0.5;
 const STALL_RESTART_AFTER = 8000;
 const STALL_RELOAD_AFTER = 20000;
 const STALL_MAX_RELOADS = 3;
-// Each stall cycle spends one restart and one reload, so this is the cap the
-// overlay renders progress against.
-const STALL_MAX_ACTIONS = STALL_MAX_RELOADS * 2;
+// The cap the overlay renders progress against. Each stall cycle spends one
+// restart and one reload, and the escalation ends on a restart -- the budget is
+// only declared spent on the tick *after* the last reload, by which time another
+// restart has been taken. Without the trailing action the overlay reported "7/6".
+const STALL_MAX_ACTIONS = STALL_MAX_RELOADS * 2 + 1;
 
 // How often the video element's playback-quality counters are read. The decode window is 30s, so
 // this keeps ~15 points in it -- enough to survive pruning without sampling being noticeable.
@@ -571,23 +573,37 @@ function useVideoPlayer({
             // after the stall watchdog's `hls.loadSource()` this fired, and the `recoverMediaError()`
             // it triggered restarted a fifty-minute film from the beginning with the wrong audio.
             //
-            // Re-selecting the track is the proportionate response. Once only: if it recurs the
-            // selection was not the problem and the original path still runs.
-            if (data.details === HLS.ErrorDetails.AUDIO_TRACK_LOAD_ERROR && !audioTrackReselected && hls.audioTracks?.length) {
+            // Re-selecting the track is the proportionate response, and restarting the loading
+            // engine is needed either way because the fatal error stopped it. Note that the track
+            // list can be *empty* here rather than merely mismatched -- hls.js clears it while a
+            // replacement manifest is in flight -- so re-selection is best-effort and the restart
+            // is the part that always applies.
+            if (data.details === HLS.ErrorDetails.AUDIO_TRACK_LOAD_ERROR) {
+              if (audioTrackReselected) {
+                // Recurring: the selection was not the problem. Rebuilding the media element would
+                // not help either, since this error never comes from the decoder, so record it
+                // rather than paying that price for nothing.
+                fatalRecoveryRef.current = { ...fatalRecoveryRef.current, exhausted: true, lastReason: reason, lastAt: Date.now() };
+                episodeRef.current.noteExhausted('fatal-unrecoverable', Date.now(), reason);
+
+                return;
+              }
+
               audioTrackReselected = true;
 
-              const reselected = hls.audioTracks[currentAudioTrackIndexRef.current] || hls.audioTracks[0];
+              const reselected = hls.audioTracks?.[currentAudioTrackIndexRef.current] || hls.audioTracks?.[0];
               const position = videoRef.current?.currentTime;
 
               episodeRef.current.noteAction('audio-track-reselect', Date.now(), {
                 index: currentAudioTrackIndexRef.current,
-                count: hls.audioTracks.length,
+                count: hls.audioTracks?.length || 0,
               });
               fatalRecoveryRef.current = { ...fatalRecoveryRef.current, lastReason: reason, lastAt: Date.now() };
 
-              hls.audioTrack = reselected.id;
+              if (reselected) {
+                hls.audioTrack = reselected.id;
+              }
 
-              // The fatal error stopped the loading engine, so it needs restarting either way.
               if (position && position > 0) {
                 hls.startLoad(position);
               } else {
@@ -674,18 +690,47 @@ function useVideoPlayer({
           fatalRecoveryRef.current = { ...fatalRecoveryRef.current, exhausted: true, lastReason: reason, lastAt: Date.now() };
           episodeRef.current.noteExhausted('fatal-unrecoverable', Date.now(), reason);
         });
-        hls.on(HLS.Events.MANIFEST_PARSED, () => {
-          const isAdaptive = hls.levels.length > 1;
-          setIsAdaptiveLevel(isAdaptive);
+        // The watchdog's full reload rebuilds the manifest's audio-track state, and the effect that
+        // applies the viewer's choice is keyed by values that do not change here, so it has to be
+        // restored explicitly -- otherwise recovery silently reverts to the group's default track
+        // while the settings menu goes on displaying the one that was chosen.
+        //
+        // This has to be `AUDIO_TRACKS_UPDATED` rather than `MANIFEST_PARSED`, which is where it
+        // used to live and where it never once ran: hls.js empties its track list at
+        // `MANIFEST_LOADING` and only refills it when a level starts loading, so `hls.audioTracks`
+        // is still `[]` at `MANIFEST_PARSED`. `AUDIO_TRACKS_UPDATED` is the event that announces the
+        // new group, and it fires immediately before hls.js chooses its own initial track -- so
+        // naming the track here is also what stops that choice from falling back to the default.
+        //
+        // Once per manifest load, though, and no more. `AUDIO_TRACKS_UPDATED` also fires when a
+        // level switch moves to a level with a different audio group, and there hls.js has *not*
+        // forgotten anything: it still holds the selected track's name and re-finds it in the new
+        // group. This restoration matches by position, because that is the correspondence the API's
+        // track list and the manifest's renditions have everywhere else in this player -- and
+        // position is exactly what a differently ordered group breaks. Applying it there would
+        // replace a correct name-based answer with a positional guess, and swap the language in the
+        // middle of a film.
+        let audioSelectionCleared = false;
 
-          // The watchdog's full reload rebuilds the manifest's audio-track
-          // state, and the effect that applies the user's choice is keyed by
-          // values that do not change here, so restore it alongside quality --
-          // otherwise recovery silently reverts to the default audio track.
+        hls.on(HLS.Events.MANIFEST_LOADING, () => {
+          audioSelectionCleared = true;
+        });
+        hls.on(HLS.Events.AUDIO_TRACKS_UPDATED, () => {
+          if (!audioSelectionCleared) {
+            return;
+          }
+
+          audioSelectionCleared = false;
+
           const hlsAudioTrack = hls.audioTracks?.[currentAudioTrackIndexRef.current];
+
           if (hlsAudioTrack) {
             hls.audioTrack = hlsAudioTrack.id;
           }
+        });
+        hls.on(HLS.Events.MANIFEST_PARSED, () => {
+          const isAdaptive = hls.levels.length > 1;
+          setIsAdaptiveLevel(isAdaptive);
 
           if (isAdaptive && qualityModeRef.current === 'auto') {
             hls.currentLevel = -1;
@@ -879,8 +924,20 @@ function useVideoPlayer({
         lastReason: 'stall / reload',
         lastAt: now,
       };
+      // Resuming has to wait for the replacement manifest. Calling `startLoad()` straight after
+      // `loadSource()` is what produced the restart reported in issue #18: `loadSource()` clears
+      // hls.js's audio-track state and fetches the manifest asynchronously, while `startLoad()`
+      // synchronously reloads the *old* level -- so the audio-track controller re-runs
+      // `selectInitialTrack()` against a list that has just been emptied, finds nothing, and raises
+      // a fatal `mediaError / audioTrackLoadError`. The `recoverMediaError()` that used to answer
+      // it detached the media element, which reset playback to zero and lost the audio selection.
+      // Waiting for `MANIFEST_PARSED` removes the race instead of handling its symptom; hls.js's
+      // own `startLoad(-1)` right afterwards keeps this position, because it resumes from the last
+      // one it was given.
+      hls.once(HLS.Events.MANIFEST_PARSED, () => {
+        hls.startLoad(position);
+      });
       hls.loadSource(currentSrc);
-      hls.startLoad(position);
     }, STALL_CHECK_INTERVAL);
 
     return () => {

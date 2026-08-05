@@ -399,6 +399,25 @@ disagree.
 
 The rule lives in `src/utils/decodeHealth.ts` with unit tests.
 
+### A stall watchdog reload costs the buffer, and cannot not
+
+The watchdog recovers by refetching the playlist for fresh segment URLs, and in the pinned hls.js
+that unavoidably discards everything buffered. `loadSource()` triggers `MANIFEST_LOADING`;
+`stream-controller.onManifestLoading()` responds with `BUFFER_RESET`; and `BufferController` handles
+that by calling `mediaSource.removeSourceBuffer()` for every type. The buffer is gone before the new
+manifest is even parsed.
+
+This was mis-analysed once and is worth stating plainly to stop it being mis-analysed again. The
+observation that `loadSource()` leaves the media element attached when the URL is unchanged is true
+— and irrelevant, because the SourceBuffers are removed by a different path. There is no public API
+in this version to refresh a VOD playlist without it: `startLoad()` does not refetch level details,
+and the level controller's playlist loading is internal.
+
+So the reload is expensive by construction, not by accident, and that cost belongs in the decision
+about whether the reload escalation earns its place at all — which is what `playback_recovered_after`
+exists to answer. It also means the level assignment in `MANIFEST_PARSED` may keep using
+`currentLevel`: there is never a buffer left for it to flush.
+
 ### Audio-track selection errors are not decode failures
 
 hls.js types `audioTrackLoadError` as a **media** error, but one of the two places it is raised has

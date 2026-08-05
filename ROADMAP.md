@@ -514,6 +514,14 @@ Ordered by priority, then by what unblocks what.
   - _Still unanswered:_ why the object is missing from that edge in the first place, and whether the
     sequential-play experiment below reproduces it.
 
+  **The reload is more expensive than it looked.** Every `watchdog-reload` discards the entire
+  buffer: `loadSource()` triggers `MANIFEST_LOADING`, which triggers `BUFFER_RESET`, which removes
+  the SourceBuffers. There is no cheaper way to refresh a VOD playlist in this hls.js version (see
+  **A7**, dropped for that reason). So the escalation trades everything already downloaded for a
+  chance at fresh segment URLs, and the episode above suggests it did not take that chance
+  successfully. That raises the bar for keeping it: if the data says the reload rarely rescues
+  playback, removing it is a real option rather than a tidy-up.
+
 - **Motivation and expected benefit:** Either the reload works, in which case the numbers can be
   tuned with evidence and the fatal-retry budget could arguably escalate to it sooner; or it does
   not, in which case a third of the recovery machinery is ceremony and should be cut.
@@ -530,38 +538,32 @@ Ordered by priority, then by what unblocks what.
 
 ### A7 — Stop the watchdog's playlist reload from flushing the buffer
 
-- **Status:** Open
-- **Priority:** Medium
+- **Status:** Dropped — the premise was wrong
+- **Priority:** —
 - **Category:** Playback recovery
-- **Origin:** Review §4.3
-- **Problem or opportunity:** The fork learned that assigning `hls.currentLevel` flushes the entire
-  buffer, and applied that lesson in one call site while leaving it in the other — the one the stall
-  watchdog re-triggers during recovery.
-- **Concrete evidence:** `media.new.tsx:267-279` documents the reasoning and uses `nextLevel`;
-  `MANIFEST_PARSED` still assigns `hls.currentLevel = -1` (`:518`) and
-  `hls.currentLevel = levelIndex` (`:531`). Verified against the pinned runtime: the setter calls
-  `streamController.immediateLevelSwitch()` (`node_modules/hls.js/dist/hls.js:16835-16839`). The
-  watchdog reaches it via `hls.loadSource(currentSrc)` (`:692`). Also verified: with an unchanged URL
-  `loadSource` does _not_ detach and re-attach the media element
-  (`dist/hls.js:16724-16741`), so the buffer survives `loadSource` itself and it is specifically the
-  `currentLevel` assignment that discards it.
-- **Motivation and expected benefit:** Bounded but real: the watchdog only fires when buffer-ahead at
-  the play position is under 0.5 s, so little is lost _at_ the position, but ranges beyond a gap —
-  the post-seek situation in which the `HTTP 0` failures were captured — are thrown away during the
-  attempt to recover from them.
-- **Proposed direction:** Distinguish a first parse from a reload. On a first parse `currentLevel` is
-  fine and pins playback immediately; on a watchdog-driven reload prefer `nextLevel`, or set the
-  level before `startLoad` so no flush is needed. A flag set by the watchdog before `loadSource` is
-  the simplest form.
-- **Dependencies and sequencing:** Independent, but its effect is only measurable alongside **A6**.
-- **Compatibility risks:** Medium — this is the code path that pins fixed quality at startup, which
-  has already been broken once (item 3's follow-up fix). Do not regress it: quality must still be
-  pinned from the first fragment.
-- **Confidence:** runtime — high on mechanism; medium on how often it matters.
-- **Validation and acceptance criteria:** Fixed quality still pinned from the first fragment on a
-  normal start (overlay `currentLevel` matches the selection); after a watchdog reload, buffered
-  ranges outside the current position survive.
-- **Estimated scope:** Small.
+- **Origin:** Review §4.3, which is corrected in `TECHNICAL_REVIEW.md`
+
+**Why it is dropped.** The item claimed the buffer survived a watchdog reload and was discarded by
+the `currentLevel` assignment in `MANIFEST_PARSED`. Only the second half was true, and it does not
+matter, because the buffer is already gone by then.
+
+`loadSource()` triggers `MANIFEST_LOADING`. `stream-controller.onManifestLoading()` responds with
+`BUFFER_RESET` (`node_modules/hls.js/dist/hls.js:9182-9189`), and `BufferController.onBufferReset()`
+calls `mediaSource.removeSourceBuffer()` for every buffer type (`:4341-4365`). So every reload
+discards everything buffered, before the new manifest is parsed, whichever property the level is
+then assigned to. An implementation of this item was written, reviewed, and reverted for exactly
+that reason.
+
+The original finding rested on a real observation — `loadSource()` does not detach the media element
+when the URL is unchanged — and drew a conclusion from it that a second path invalidated. Checking
+one mechanism that could have preserved the buffer, then concluding it was preserved, is the mistake
+worth remembering here.
+
+**What replaces it.** Nothing to build: there is no public API in this hls.js version to refresh a
+VOD playlist without the reset. `startLoad()` does not refetch level details, and the level
+controller's playlist loading is internal. The cost is therefore a property of the reload
+escalation, and belongs in the decision about whether that escalation earns its place — see **A6**,
+which now records it.
 
 ### A8 — Make the QR capture carry everything the overlay shows
 
@@ -692,10 +694,32 @@ Ordered by priority, then by what unblocks what.
 
 ### A18 — A web build for reproducing playback problems, with scripted scenarios
 
-- **Status:** Open
+- **Status:** Partially implemented — the scripted scenarios exist; the browser build does not
 - **Priority:** Medium
 - **Category:** Test infrastructure
 - **Origin:** Requested after **A4** removed the public deployment; enables **A5**, **A6**, **A11**
+
+> **The scripted half is done, in-process rather than in a browser.** > `src/components/media/media.scenarios.test.tsx` mounts the real player over a scripted CDN
+> (`src/testing/hlsCdn.ts`) and drives the real hls.js through the observed failures: a refused
+> segment, a hanging edge, an edge escaped by refetching the playlist, the terminal failure notice,
+> and a manual retry. The substitution point is hls.js's `config.loader`, so the same scenarios can
+> be re-run against a new hls.js to see which of this player's workarounds it has made redundant —
+> see [Playback scenario tests](./docs/playback-scenario-tests.md). They run in CI in under two
+> seconds because the clock is virtual.
+>
+> They found one live defect immediately, now fixed: see **A20**.
+>
+> One limitation of the harness is worth knowing before writing a scenario against it: synthetic
+> segments are a fixed handful of bytes whatever bitrate their level declares, so hls.js's bandwidth
+> estimate is meaningless and its ABR choice flaps on a multi-level master. Every scenario here uses
+> a single level for that reason, and anything about level switching — including moving between
+> audio groups — is out of reach until segments are sized to their declared bitrate.
+>
+> What remains open is the browser build, and the scenarios it alone can cover: a seek into an
+> unbuffered region against the real CDN, bandwidth collapse driving real ABR, and confirming a
+> `teardown` episode is delivered to Sentry rather than merely queued (**A2**). Those need a real
+> network and a real Sentry, which is exactly what does not belong in a test suite.
+
 - **Problem or opportunity:** Every open investigation in this roadmap is gated on somebody sitting
   in front of a television at the moment a rare failure happens, then reading it back through a QR
   code. A browser build would put the same player somewhere with real developer tools — network
@@ -748,12 +772,39 @@ Ordered by priority, then by what unblocks what.
 - **Origin:** [#18](https://github.com/kaaburgh/kinopub.webos/issues/18), while fixing what it
   reported
 
-> **One case answered.** `audioTrackLoadError` no longer goes to `recoverMediaError()` on its first
-> occurrence: hls.js raises it from `selectInitialTrack()` when a rebuilt audio group has no track
-> matching the selected name, which is a selection problem rather than a decode one, and which the
-> stall watchdog's own playlist reload provokes. It is now re-selected in place, with the media path
-> kept as the fallback on a repeat. The general question — which recoveries suit which error details
-> — still wants episode data across more failures.
+> **Root cause found and fixed; the general question stays open.** The scenario tests from **A18**
+> reproduced the restart on the first run, and showed that the earlier fix could never have engaged.
+> The trigger is not a mismatched audio group at all: it is the watchdog's own
+> `hls.loadSource(currentSrc); hls.startLoad(position);` pair. `loadSource()` clears hls.js's
+> audio-track list and fetches the manifest asynchronously, while `startLoad()` synchronously
+> reloads the _old_ level — so `selectInitialTrack()` runs against a list that has just been
+> emptied, finds nothing, and raises a fatal `mediaError / audioTrackLoadError`. Because the list is
+> empty rather than mismatched, the guard `hls.audioTracks?.length` was false and the code fell
+> through to `recoverMediaError()` exactly as before. This matches the Sentry trail in #18, where
+> the error arrived 54 ms after `watchdog-reload`.
+>
+> The watchdog now waits for `MANIFEST_PARSED` before resuming, which removes the race rather than
+> handling its symptom, and `audioTrackLoadError` no longer reaches `recoverMediaError()` at all — a
+> repeat is recorded as unrecoverable instead, since this error never comes from the decoder.
+> Reverting either change makes _"recovers from a bad edge without restarting the film"_ fail.
+>
+> **The second symptom is fixed too, and had the same shape.** The audio track reverting to the
+> default after a recovery was not a consequence of `recoverMediaError()` at all: the restoration
+> that was supposed to prevent it had been registered on `MANIFEST_PARSED`, where `hls.audioTracks`
+> is still `[]` because hls.js empties the list at `MANIFEST_LOADING` and only refills it when a
+> level starts loading. It therefore never ran, not once. Reproduced with the scenario harness: pick
+> the non-default track, provoke a watchdog reload, and hls.js is playing the group's default while
+> the settings menu still says otherwise. It is now restored on `AUDIO_TRACKS_UPDATED`, the event
+> that announces the new group — which also fires immediately before hls.js picks its own initial
+> track, so naming it there is what stops the fallback. Covered by _"keeps the viewer's audio track
+> through a recovery"_.
+>
+> A third, cosmetic defect surfaced alongside: the stall watchdog's budget was capped at
+> `STALL_MAX_RELOADS * 2`, but its escalation ends on a restart, so the overlay could render "7/6".
+> The cap now matches the escalation.
+>
+> The general question — which recoveries suit which error details — still wants episode data across
+> more failures.
 
 - **Problem or opportunity:** Every fatal `mediaError` goes through `recoverMediaError()`, which
   detaches and re-attaches the media element. That is a very large hammer, and the two symptoms
