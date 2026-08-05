@@ -227,8 +227,9 @@ export function installMediaSourceStub() {
   };
   url.revokeObjectURL = () => {};
 
-  // hls.js reads `media.buffered` constantly and jsdom's is permanently empty; the scenario tests
-  // install their own descriptor per element (see `attachPlaybackStub`).
+  // jsdom's media element rejects every transport call it is given, and hls.js makes them freely.
+  // What the element reports -- `buffered`, `paused`, `readyState` -- is supplied per element by
+  // the harness, which is the only thing that knows what the simulated stream has delivered.
   const media = (window as unknown as { HTMLMediaElement: { prototype: HTMLMediaElement } }).HTMLMediaElement.prototype;
   media.play = function play() {
     return Promise.resolve();
