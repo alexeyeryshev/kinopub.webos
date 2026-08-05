@@ -399,23 +399,24 @@ disagree.
 
 The rule lives in `src/utils/decodeHealth.ts` with unit tests.
 
-### A recovery reload must not flush the buffer
+### A stall watchdog reload costs the buffer, and cannot not
 
-`hls.currentLevel = n` applies a level by flushing the entire buffer — hls.js's setter calls
-`streamController.immediateLevelSwitch()`. On a fresh source that is exactly right: there is nothing
-to lose, and playback starts pinned to the requested quality from its first fragment.
+The watchdog recovers by refetching the playlist for fresh segment URLs, and in the pinned hls.js
+that unavoidably discards everything buffered. `loadSource()` triggers `MANIFEST_LOADING`;
+`stream-controller.onManifestLoading()` responds with `BUFFER_RESET`; and `BufferController` handles
+that by calling `mediaSource.removeSourceBuffer()` for every type. The buffer is gone before the new
+manifest is even parsed.
 
-The stall watchdog reaches the same `MANIFEST_PARSED` handler, because recovering means refetching
-the same playlist for new segment URLs. Flushing there throws away buffered ranges the stall never
-cost us — content beyond a gap, which is precisely the post-seek shape the `HTTP 0` failures were
-captured in — while trying to recover from the stall. So the watchdog marks the reload before
-calling `loadSource`, and the handler pins the level through `nextLevel` instead, which takes effect
-from the next fragment and leaves what is already buffered alone.
+This was mis-analysed once and is worth stating plainly to stop it being mis-analysed again. The
+observation that `loadSource()` leaves the media element attached when the URL is unchanged is true
+— and irrelevant, because the SourceBuffers are removed by a different path. There is no public API
+in this version to refresh a VOD playlist without it: `startLoad()` does not refetch level details,
+and the level controller's playlist loading is internal.
 
-This is the same distinction `setSourceTrack` makes for in-place quality changes, applied to the
-other call site that reaches the same setter. Getting it backwards is not hypothetical: an earlier
-version of the quality switch used `currentLevel` and turned a stream coasting through network
-failures on 82 s of buffer into an unrecoverable stall.
+So the reload is expensive by construction, not by accident, and that cost belongs in the decision
+about whether the reload escalation earns its place at all — which is what `playback_recovered_after`
+exists to answer. It also means the level assignment in `MANIFEST_PARSED` may keep using
+`currentLevel`: there is never a buffer left for it to flush.
 
 ### Audio-track selection errors are not decode failures
 

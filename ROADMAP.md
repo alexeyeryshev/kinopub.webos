@@ -514,6 +514,14 @@ Ordered by priority, then by what unblocks what.
   - _Still unanswered:_ why the object is missing from that edge in the first place, and whether the
     sequential-play experiment below reproduces it.
 
+  **The reload is more expensive than it looked.** Every `watchdog-reload` discards the entire
+  buffer: `loadSource()` triggers `MANIFEST_LOADING`, which triggers `BUFFER_RESET`, which removes
+  the SourceBuffers. There is no cheaper way to refresh a VOD playlist in this hls.js version (see
+  **A7**, dropped for that reason). So the escalation trades everything already downloaded for a
+  chance at fresh segment URLs, and the episode above suggests it did not take that chance
+  successfully. That raises the bar for keeping it: if the data says the reload rarely rescues
+  playback, removing it is a real option rather than a tidy-up.
+
 - **Motivation and expected benefit:** Either the reload works, in which case the numbers can be
   tuned with evidence and the fatal-retry budget could arguably escalate to it sooner; or it does
   not, in which case a third of the recovery machinery is ceremony and should be cut.
@@ -530,45 +538,32 @@ Ordered by priority, then by what unblocks what.
 
 ### A7 — Stop the watchdog's playlist reload from flushing the buffer
 
-> **Implemented.** The watchdog marks the reload before `loadSource`, and `MANIFEST_PARSED` pins the
-> level through `nextLevel` on a reload and `currentLevel` on a fresh source — so a recovery keeps
-> whatever is still buffered, while a normal start still pins quality from its first fragment. Both
-> the Auto (`-1`) and fixed-level branches were assigning `currentLevel`, so both had to move.
-> **Validation on device outstanding:** the acceptance criteria below are two-sided, and the second
-> one — quality still pinned on a normal start — is the side that has broken silently before.
-
-- **Status:** Implemented — validation on device outstanding
-- **Priority:** Medium
+- **Status:** Dropped — the premise was wrong
+- **Priority:** —
 - **Category:** Playback recovery
-- **Origin:** Review §4.3
-- **Problem or opportunity:** The fork learned that assigning `hls.currentLevel` flushes the entire
-  buffer, and applied that lesson in one call site while leaving it in the other — the one the stall
-  watchdog re-triggers during recovery.
-- **Concrete evidence:** `media.new.tsx:267-279` documents the reasoning and uses `nextLevel`;
-  `MANIFEST_PARSED` still assigns `hls.currentLevel = -1` (`:518`) and
-  `hls.currentLevel = levelIndex` (`:531`). Verified against the pinned runtime: the setter calls
-  `streamController.immediateLevelSwitch()` (`node_modules/hls.js/dist/hls.js:16835-16839`). The
-  watchdog reaches it via `hls.loadSource(currentSrc)` (`:692`). Also verified: with an unchanged URL
-  `loadSource` does _not_ detach and re-attach the media element
-  (`dist/hls.js:16724-16741`), so the buffer survives `loadSource` itself and it is specifically the
-  `currentLevel` assignment that discards it.
-- **Motivation and expected benefit:** Bounded but real: the watchdog only fires when buffer-ahead at
-  the play position is under 0.5 s, so little is lost _at_ the position, but ranges beyond a gap —
-  the post-seek situation in which the `HTTP 0` failures were captured — are thrown away during the
-  attempt to recover from them.
-- **Proposed direction:** Distinguish a first parse from a reload. On a first parse `currentLevel` is
-  fine and pins playback immediately; on a watchdog-driven reload prefer `nextLevel`, or set the
-  level before `startLoad` so no flush is needed. A flag set by the watchdog before `loadSource` is
-  the simplest form.
-- **Dependencies and sequencing:** Independent, but its effect is only measurable alongside **A6**.
-- **Compatibility risks:** Medium — this is the code path that pins fixed quality at startup, which
-  has already been broken once (item 3's follow-up fix). Do not regress it: quality must still be
-  pinned from the first fragment.
-- **Confidence:** runtime — high on mechanism; medium on how often it matters.
-- **Validation and acceptance criteria:** Fixed quality still pinned from the first fragment on a
-  normal start (overlay `currentLevel` matches the selection); after a watchdog reload, buffered
-  ranges outside the current position survive.
-- **Estimated scope:** Small.
+- **Origin:** Review §4.3, which is corrected in `TECHNICAL_REVIEW.md`
+
+**Why it is dropped.** The item claimed the buffer survived a watchdog reload and was discarded by
+the `currentLevel` assignment in `MANIFEST_PARSED`. Only the second half was true, and it does not
+matter, because the buffer is already gone by then.
+
+`loadSource()` triggers `MANIFEST_LOADING`. `stream-controller.onManifestLoading()` responds with
+`BUFFER_RESET` (`node_modules/hls.js/dist/hls.js:9182-9189`), and `BufferController.onBufferReset()`
+calls `mediaSource.removeSourceBuffer()` for every buffer type (`:4341-4365`). So every reload
+discards everything buffered, before the new manifest is parsed, whichever property the level is
+then assigned to. An implementation of this item was written, reviewed, and reverted for exactly
+that reason.
+
+The original finding rested on a real observation — `loadSource()` does not detach the media element
+when the URL is unchanged — and drew a conclusion from it that a second path invalidated. Checking
+one mechanism that could have preserved the buffer, then concluding it was preserved, is the mistake
+worth remembering here.
+
+**What replaces it.** Nothing to build: there is no public API in this hls.js version to refresh a
+VOD playlist without the reset. `startLoad()` does not refetch level details, and the level
+controller's playlist loading is internal. The cost is therefore a property of the reload
+escalation, and belongs in the decision about whether that escalation earns its place — see **A6**,
+which now records it.
 
 ### A8 — Make the QR capture carry everything the overlay shows
 

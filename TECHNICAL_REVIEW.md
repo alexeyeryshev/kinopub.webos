@@ -177,31 +177,34 @@ from `playback_episode` counts today is drawn from a filtered sample.
 **Confidence: high.** Fix is small (flush on cleanup), but note the episode should probably be
 labelled distinctly — "abandoned by user" is a different fact from "abandoned after grace period".
 
-### 4.3 The watchdog's playlist reload still flushes the buffer — Medium
+### 4.3 The watchdog's playlist reload still flushes the buffer — ~~Medium~~ **WRONG, corrected below**
 
-`setSourceTrack` deliberately uses `nextLevel` rather than `currentLevel`, with a comment explaining
-that `currentLevel` "flushes the whole buffer to apply the switch instantly" and that this is what
-"converted a stream coasting through network failures on 82 s of buffer into an unrecoverable
-stall" (`media.new.tsx:267-279`).
+**This finding was incorrect and the item it produced (roadmap A7) has been dropped.** It is kept
+here rather than deleted, because a review whose value rests on its claims being checkable owes a
+correction where one turned out not to survive checking.
 
-The `MANIFEST_PARSED` handler still uses `currentLevel` — `hls.currentLevel = -1` at `:518` and
-`hls.currentLevel = levelIndex` at `:531`. Verified against the pinned runtime: the `currentLevel`
-setter calls `this.streamController.immediateLevelSwitch()`
-(`node_modules/hls.js/dist/hls.js:16835-16839`).
+What it said: `setSourceTrack` deliberately uses `nextLevel` rather than `currentLevel`, because
+`currentLevel` "flushes the whole buffer to apply the switch instantly" (`media.new.tsx:267-279`),
+while the `MANIFEST_PARSED` handler still assigns `currentLevel` — so the watchdog's
+`hls.loadSource(currentSrc)` re-triggers that handler and flushes the buffer during recovery.
 
-On a fresh load that is harmless. But the watchdog's escalation calls `hls.loadSource(currentSrc)`
-(`media.new.tsx:692`), which re-triggers `MANIFEST_LOADING` → `MANIFEST_PARSED`, so the same flush
-now happens _during recovery_. Also verified: because the URL is unchanged, `loadSource` does **not**
-detach and re-attach the media element (`dist/hls.js:16724-16741` — the detach branch requires
-`loadedSource !== loadingSource`), so the SourceBuffer survives `loadSource` itself and it is
-specifically the `currentLevel` assignment that discards it.
+What is actually true: **the buffer is already gone before `MANIFEST_PARSED` runs**, so which
+property the level is assigned to changes nothing. `loadSource()` triggers `MANIFEST_LOADING`;
+`stream-controller.onManifestLoading()` responds with `BUFFER_RESET`
+(`node_modules/hls.js/dist/hls.js:9182-9189`); `BufferController.onBufferReset()` calls
+`mediaSource.removeSourceBuffer()` for every buffer type (`:4341-4365`). Every watchdog reload
+discards everything buffered, unavoidably — there is no public API in this version to refresh a VOD
+playlist without it.
 
-Impact is bounded: the watchdog only fires when buffer-ahead at the play position is below 0.5 s
-(`STALL_MIN_BUFFER_AHEAD`, `:63`), so there is little to lose _at_ the position. Ranges beyond a gap
-— the situation after a seek, which is exactly when the LG G5 captures showed `HTTP 0` — are lost.
+**How the error happened**, since that is the transferable part. The finding checked one mechanism
+that could have destroyed the buffer — whether `loadSource` detaches and re-attaches the media
+element — found that it does not when the URL is unchanged, and concluded the buffer survives. That
+is a conclusion about a whole system drawn from one path through it. The `currentLevel` half of the
+claim was independently verified and correct; the half that mattered was an inference presented in
+the same voice as the checks around it.
 
-**Confidence: high on the mechanism, medium on impact.** The lesson was learned in one call site and
-not applied to the other.
+The real constraint — that the reload is expensive by construction — is recorded against **A6**,
+where it raises the bar for keeping the reload escalation at all.
 
 ### 4.4 A second fatal error overwrites the pending retry timer — Low
 

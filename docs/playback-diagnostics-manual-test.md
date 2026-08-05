@@ -191,18 +191,18 @@ Use this checklist on an LG webOS TV after installing a build that includes the 
 - Confirm that once playback genuinely resumes, a later unrelated failure starts again from `1/6`
   rather than inheriting the spent budget.
 
-## Watchdog Reload Keeps The Buffer
+## Watchdog Reload Restarts From Empty
 
 - Start a title, seek forward so there is a gap, and let content buffer on both sides of it.
 - Note the `ranges` line in the `Buffer` section — it should show two ranges.
-- Provoke a stall long enough for the watchdog to escalate to `watchdog-reload` (the `recovery:`
-  line shows it, and the Sentry breadcrumbs name it).
-- Confirm the buffered ranges outside the current position **survive** the reload. Losing them is
-  the regression this guards: applying a level with `currentLevel` flushes the whole buffer, and the
-  watchdog reaches the same code path as a fresh source.
-- Equally important, confirm the opposite has not broken: on a **normal** start with a fixed quality
-  selected, `currentLevel` in the `HLS` section must match the selection from the first fragment.
-  This path has silently stopped pinning quality once before.
+- Provoke a stall long enough for the watchdog to escalate to `watchdog-reload`.
+- Expect the buffered ranges to be **gone** afterwards, rebuilding from the play position. This is
+  not a defect to report: `loadSource()` triggers `BUFFER_RESET` in this hls.js version and the
+  SourceBuffers are removed. It is recorded here so the cost of the reload is visible when judging
+  whether that escalation is worth keeping.
+- Confirm playback does resume from where it stalled rather than from the beginning — the watchdog
+  passes the position to `startLoad()`, which matters because `onManifestLoading` resets hls.js's
+  own start position to zero.
 
 ## Decode Health Indicator
 
