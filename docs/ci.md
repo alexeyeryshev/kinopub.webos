@@ -33,8 +33,12 @@ Notes:
 - The type check runs separately from the build because `tsc --noEmit` reports
   type errors in about a minute, while `yarn build` only reaches them after a
   full webpack build.
-- There are no test files yet. The test step uses `--passWithNoTests`, so added
-  tests start running without a workflow change.
+- The test step uses `--passWithNoTests`, so added tests start running without a
+  workflow change. It covers the unit tests under `src/utils/` and the playback
+  scenario tests described in
+  [Playback scenario tests](./playback-scenario-tests.md), which mount the real
+  player over a scripted CDN. Those run under fake timers, so several minutes of
+  stream time cost well under a second of CI time.
 - The docs link check (`scripts/check-docs-links.js`) is plain Node.js with no
   dependencies and requests no external URLs; it only resolves relative links on
   disk. It exists because the documentation here cross-references itself

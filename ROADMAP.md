@@ -694,10 +694,26 @@ which now records it.
 
 ### A18 — A web build for reproducing playback problems, with scripted scenarios
 
-- **Status:** Open
+- **Status:** Partially implemented — the scripted scenarios exist; the browser build does not
 - **Priority:** Medium
 - **Category:** Test infrastructure
 - **Origin:** Requested after **A4** removed the public deployment; enables **A5**, **A6**, **A11**
+
+> **The scripted half is done, in-process rather than in a browser.** > `src/components/media/media.scenarios.test.tsx` mounts the real player over a scripted CDN
+> (`src/testing/hlsCdn.ts`) and drives the real hls.js through the observed failures: a refused
+> segment, a hanging edge, an edge escaped by refetching the playlist, the terminal failure notice,
+> and a manual retry. The substitution point is hls.js's `config.loader`, so the same scenarios can
+> be re-run against a new hls.js to see which of this player's workarounds it has made redundant —
+> see [Playback scenario tests](./docs/playback-scenario-tests.md). They run in CI in under two
+> seconds because the clock is virtual.
+>
+> They found one live defect immediately, now fixed: see **A20**.
+>
+> What remains open is the browser build, and the scenarios it alone can cover: a seek into an
+> unbuffered region against the real CDN, bandwidth collapse driving real ABR, and confirming a
+> `teardown` episode is delivered to Sentry rather than merely queued (**A2**). Those need a real
+> network and a real Sentry, which is exactly what does not belong in a test suite.
+
 - **Problem or opportunity:** Every open investigation in this roadmap is gated on somebody sitting
   in front of a television at the moment a rare failure happens, then reading it back through a QR
   code. A browser build would put the same player somewhere with real developer tools — network
@@ -750,12 +766,39 @@ which now records it.
 - **Origin:** [#18](https://github.com/kaaburgh/kinopub.webos/issues/18), while fixing what it
   reported
 
-> **One case answered.** `audioTrackLoadError` no longer goes to `recoverMediaError()` on its first
-> occurrence: hls.js raises it from `selectInitialTrack()` when a rebuilt audio group has no track
-> matching the selected name, which is a selection problem rather than a decode one, and which the
-> stall watchdog's own playlist reload provokes. It is now re-selected in place, with the media path
-> kept as the fallback on a repeat. The general question — which recoveries suit which error details
-> — still wants episode data across more failures.
+> **Root cause found and fixed; the general question stays open.** The scenario tests from **A18**
+> reproduced the restart on the first run, and showed that the earlier fix could never have engaged.
+> The trigger is not a mismatched audio group at all: it is the watchdog's own
+> `hls.loadSource(currentSrc); hls.startLoad(position);` pair. `loadSource()` clears hls.js's
+> audio-track list and fetches the manifest asynchronously, while `startLoad()` synchronously
+> reloads the _old_ level — so `selectInitialTrack()` runs against a list that has just been
+> emptied, finds nothing, and raises a fatal `mediaError / audioTrackLoadError`. Because the list is
+> empty rather than mismatched, the guard `hls.audioTracks?.length` was false and the code fell
+> through to `recoverMediaError()` exactly as before. This matches the Sentry trail in #18, where
+> the error arrived 54 ms after `watchdog-reload`.
+>
+> The watchdog now waits for `MANIFEST_PARSED` before resuming, which removes the race rather than
+> handling its symptom, and `audioTrackLoadError` no longer reaches `recoverMediaError()` at all — a
+> repeat is recorded as unrecoverable instead, since this error never comes from the decoder.
+> Reverting either change makes _"recovers from a bad edge without restarting the film"_ fail.
+>
+> **The second symptom is fixed too, and had the same shape.** The audio track reverting to the
+> default after a recovery was not a consequence of `recoverMediaError()` at all: the restoration
+> that was supposed to prevent it had been registered on `MANIFEST_PARSED`, where `hls.audioTracks`
+> is still `[]` because hls.js empties the list at `MANIFEST_LOADING` and only refills it when a
+> level starts loading. It therefore never ran, not once. Reproduced with the scenario harness: pick
+> the non-default track, provoke a watchdog reload, and hls.js is playing the group's default while
+> the settings menu still says otherwise. It is now restored on `AUDIO_TRACKS_UPDATED`, the event
+> that announces the new group — which also fires immediately before hls.js picks its own initial
+> track, so naming it there is what stops the fallback. Covered by _"keeps the viewer's audio track
+> through a recovery"_.
+>
+> A third, cosmetic defect surfaced alongside: the stall watchdog's budget was capped at
+> `STALL_MAX_RELOADS * 2`, but its escalation ends on a restart, so the overlay could render "7/6".
+> The cap now matches the escalation.
+>
+> The general question — which recoveries suit which error details — still wants episode data across
+> more failures.
 
 - **Problem or opportunity:** Every fatal `mediaError` goes through `recoverMediaError()`, which
   detaches and re-attaches the media element. That is a very large hammer, and the two symptoms
