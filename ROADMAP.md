@@ -709,11 +709,10 @@ which now records it.
 >
 > They found one live defect immediately, now fixed: see **A20**.
 >
-> One limitation of the harness is worth knowing before writing a scenario against it: synthetic
-> segments are a fixed handful of bytes whatever bitrate their level declares, so hls.js's bandwidth
-> estimate is meaningless and its ABR choice flaps on a multi-level master. Every scenario here uses
-> a single level for that reason, and anything about level switching — including moving between
-> audio groups — is out of reach until segments are sized to their declared bitrate.
+> Multi-level scenarios work too: the mock reports each fragment at the size its level's declared
+> bitrate implies and takes a configurable link time to deliver it, so hls.js's bandwidth estimate
+> is meaningful and its level choice is deterministic. That covers quality switching, moving between
+> audio groups, and ABR adapting to a link that cannot carry the top rendition.
 >
 > What remains open is the browser build, and the scenarios it alone can cover: a seek into an
 > unbuffered region against the real CDN, bandwidth collapse driving real ABR, and confirming a

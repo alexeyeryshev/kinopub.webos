@@ -73,6 +73,16 @@ export type MockCdnOptions = {
    * be shown to achieve anything.
    */
   edges?: string[];
+  /**
+   * Link throughput in bits per second, or `undefined` for a link with no cost at all.
+   *
+   * Set it whenever a scenario involves more than one level. hls.js chooses a level from a
+   * bandwidth estimate it derives from how long responses took and how many bytes they carried, so
+   * with instant responses that estimate is meaningless and its choice flaps between levels for no
+   * reason the scenario controls. Leave it unset for single-level scenarios, where nothing reads
+   * the estimate and a free link keeps them fast.
+   */
+  throughput?: number;
 };
 
 const DEFAULTS = {
@@ -201,6 +211,7 @@ export function createMockCdn(options: MockCdnOptions = {}) {
   const segmentCount = options.segmentCount ?? DEFAULTS.segmentCount;
   const segmentDuration = options.segmentDuration ?? DEFAULTS.segmentDuration;
   const edges = options.edges?.length ? options.edges : DEFAULTS.edges;
+  const throughput = options.throughput;
 
   const requests: CdnRequest[] = [];
   const attempts = new Map<string, number>();
@@ -270,6 +281,25 @@ export function createMockCdn(options: MockCdnOptions = {}) {
     lines.push('#EXT-X-ENDLIST');
 
     return `${lines.join('\n')}\n`;
+  }
+
+  /**
+   * How many bytes a segment of this level would really weigh.
+   *
+   * Reported to hls.js rather than allocated: the demuxer only needs enough valid ADTS to parse,
+   * while the bandwidth estimator only reads the byte count and the time it took. Allocating ten
+   * megabytes per segment to satisfy the estimator would cost the suite its speed and prove
+   * nothing extra.
+   */
+  function segmentBytesForLevel(levelIndex: number) {
+    const bandwidth = levels[levelIndex]?.bandwidth ?? DEFAULTS.levels[0].bandwidth;
+
+    return Math.round((bandwidth * segmentDuration) / 8);
+  }
+
+  /** Milliseconds this many bytes take on the configured link. Zero when the link is free. */
+  function transferMs(bytes: number) {
+    return throughput ? Math.round((bytes * 8 * 1000) / throughput) : 0;
   }
 
   function defaultReply(request: CdnRequest): CdnReply {
@@ -343,6 +373,13 @@ export function createMockCdn(options: MockCdnOptions = {}) {
         return;
       }
 
+      const levelOfPath = /level(\d+)\//.exec(path);
+      // A refusal costs nothing to deliver; only a body spends time on the link.
+      const wireBytes =
+        reply.status >= 200 && reply.status < 300 && reply.body !== undefined && request.kind === 'fragment'
+          ? segmentBytesForLevel(levelOfPath ? Number(levelOfPath[1]) : 0)
+          : 0;
+
       this.timers.push(
         setTimeout(() => {
           if (this.destroyed) {
@@ -356,7 +393,7 @@ export function createMockCdn(options: MockCdnOptions = {}) {
             const body = reply.body;
             const data = wantsBinary ? toArrayBuffer(body) : toText(body);
 
-            this.stats.loaded = this.stats.total = typeof data === 'string' ? data.length : (data as ArrayBuffer).byteLength;
+            this.stats.loaded = this.stats.total = wireBytes || (typeof data === 'string' ? data.length : (data as ArrayBuffer).byteLength);
 
             // Not optional, and easy to miss: hls.js feeds its transmuxer from `onProgress`, and
             // its own XHR loader calls it with the whole body on completion when progressive
@@ -382,7 +419,7 @@ export function createMockCdn(options: MockCdnOptions = {}) {
           this.retryDelay = Math.min(2 * this.retryDelay, config.maxRetryDelay);
           this.stats.retry += 1;
           this.timers.push(setTimeout(() => !this.destroyed && this.attempt(context, config, callbacks), delay));
-        }, 0),
+        }, transferMs(wireBytes)),
       );
     }
 
