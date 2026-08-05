@@ -701,7 +701,27 @@ function useVideoPlayer({
         // is still `[]` at `MANIFEST_PARSED`. `AUDIO_TRACKS_UPDATED` is the event that announces the
         // new group, and it fires immediately before hls.js chooses its own initial track -- so
         // naming the track here is also what stops that choice from falling back to the default.
+        //
+        // Once per manifest load, though, and no more. `AUDIO_TRACKS_UPDATED` also fires when a
+        // level switch moves to a level with a different audio group, and there hls.js has *not*
+        // forgotten anything: it still holds the selected track's name and re-finds it in the new
+        // group. This restoration matches by position, because that is the correspondence the API's
+        // track list and the manifest's renditions have everywhere else in this player -- and
+        // position is exactly what a differently ordered group breaks. Applying it there would
+        // replace a correct name-based answer with a positional guess, and swap the language in the
+        // middle of a film.
+        let audioSelectionCleared = false;
+
+        hls.on(HLS.Events.MANIFEST_LOADING, () => {
+          audioSelectionCleared = true;
+        });
         hls.on(HLS.Events.AUDIO_TRACKS_UPDATED, () => {
+          if (!audioSelectionCleared) {
+            return;
+          }
+
+          audioSelectionCleared = false;
+
           const hlsAudioTrack = hls.audioTracks?.[currentAudioTrackIndexRef.current];
 
           if (hlsAudioTrack) {

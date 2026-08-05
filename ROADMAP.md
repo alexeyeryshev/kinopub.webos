@@ -709,6 +709,12 @@ which now records it.
 >
 > They found one live defect immediately, now fixed: see **A20**.
 >
+> One limitation of the harness is worth knowing before writing a scenario against it: synthetic
+> segments are a fixed handful of bytes whatever bitrate their level declares, so hls.js's bandwidth
+> estimate is meaningless and its ABR choice flaps on a multi-level master. Every scenario here uses
+> a single level for that reason, and anything about level switching — including moving between
+> audio groups — is out of reach until segments are sized to their declared bitrate.
+>
 > What remains open is the browser build, and the scenarios it alone can cover: a seek into an
 > unbuffered region against the real CDN, bandwidth collapse driving real ABR, and confirming a
 > `teardown` episode is delivered to Sentry rather than merely queued (**A2**). Those need a real

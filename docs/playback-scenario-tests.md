@@ -102,6 +102,13 @@ the two tripwires above, where the number is the whole point and is documented a
   behaviour, or the codec issues that only appear on the television's own hardware.
 - Playback progress is simulated from what the CDN delivered, so it is regular in a way real
   playback is not.
+- **Anything involving more than one level is out of reach today.** Segments are a fixed handful of
+  bytes regardless of the bandwidth their level declares, so hls.js's bandwidth estimate bears no
+  relation to the manifest and its ABR choice flaps. A scenario written over a multi-level master
+  therefore passes or fails on that flapping rather than on what it meant to test — which also rules
+  out level switching, and with it anything that depends on moving between audio groups. Sizing
+  synthetic segments to their declared bitrate would fix this and is the natural next step for the
+  harness.
 - The scenarios cover network failures. Failures of the TV itself (memory pressure, the webOS media
   pipeline, remote-control focus) are out of reach and stay manual — see
   [Playback diagnostics manual test](./playback-diagnostics-manual-test.md).
