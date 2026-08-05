@@ -6,6 +6,7 @@ import forEach from 'lodash/forEach';
 import useStorageState from 'hooks/useStorageState';
 
 import { DecodeHealth, DecodeSample, EMPTY_DECODE_HEALTH, evaluateDecodeHealth, pruneSamples, pruneTimestamps } from 'utils/decodeHealth';
+import { VideoRange, getStreamVideoRange } from 'utils/hdr';
 import { getFailureCategory } from 'utils/hlsFailures';
 import { findLevelIndexForQuality } from 'utils/hlsLevels';
 import { provesStreamRecovered } from 'utils/hlsRecovery';
@@ -138,6 +139,8 @@ export type MediaRef = {
   readonly hls: HLS | null;
   readonly recovery: RecoveryState;
   readonly audioTrackIndex: number;
+  /** `VIDEO-RANGE` of the stream, when the manifest declares one. `undefined` means it did not. */
+  readonly videoRange: VideoRange | undefined;
   readonly failure: PlaybackFailure | undefined;
   readonly decodeHealth: DecodeHealth;
   currentTime: number;
@@ -308,6 +311,9 @@ function useVideoPlayer({
   // The position the player believes is selected. Exposed so diagnostics can hold it next to what
   // hls.js is actually playing: the two drifting apart is a real defect and is otherwise invisible.
   const getAudioTrackIndex = useCallback(() => currentAudioTrackIndexRef.current, []);
+  // Read live rather than cached: levels arrive a moment after playback starts, and in Auto mode
+  // `currentLevel` stays -1 until hls.js has chosen one.
+  const getVideoRange = useCallback(() => getStreamVideoRange(hlsRef.current?.levels as any[], hlsRef.current?.currentLevel), []);
   const setAudioTrack = useCallback(
     (audioTrackName: string) => {
       const audioTrackIndex = audioTracks?.findIndex((audioTrack) => audioTrack.name === audioTrackName) ?? -1;
@@ -1019,6 +1025,7 @@ function useVideoPlayer({
       getAudioTracks,
       getAudioTrack,
       getAudioTrackIndex,
+      getVideoRange,
       setAudioTrack,
       getSourceTracks,
       getSourceTrack,
@@ -1037,6 +1044,7 @@ function useVideoPlayer({
       getAudioTracks,
       getAudioTrack,
       getAudioTrackIndex,
+      getVideoRange,
       setAudioTrack,
       getSourceTracks,
       getSourceTrack,
@@ -1155,6 +1163,9 @@ function useVideoPlayerApi(ref: React.ForwardedRef<MediaRef>, props: OwnProps) {
       },
       get audioTrackIndex() {
         return player.getAudioTrackIndex();
+      },
+      get videoRange() {
+        return player.getVideoRange();
       },
       get failure() {
         return player.getFailure();

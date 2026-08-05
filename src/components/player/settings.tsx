@@ -15,6 +15,13 @@ const NONE = 'NONE';
 // chosen as best for an HDR title, which is the shape of a range that stops too early -- the
 // preferred value may well be below the floor. SDR sat around 50-75%, so the top of the range is
 // still where it needs to be.
+/**
+ * Defaults measured on the TV rather than chosen: 100% was reported as "much brighter than the
+ * video itself" in HDR, where 25% read best, and SDR preferred 50-75%.
+ */
+export const SUBTITLE_OPACITY_SDR_DEFAULT = 0.75;
+export const SUBTITLE_OPACITY_HDR_DEFAULT = 0.25;
+
 const SUBTITLE_OPACITY_OPTIONS = [
   { title: '100%', value: 1 },
   { title: '75%', value: 0.75 },

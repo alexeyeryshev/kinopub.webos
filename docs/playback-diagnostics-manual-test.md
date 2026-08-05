@@ -123,14 +123,23 @@ Use this checklist on an LG webOS TV after installing a build that includes the 
 - Confirm `Яркость субтитров` now offers 15% and 10% below 25%. On the TV, 25% was both the dimmest
   option and the one chosen as best for HDR, which is the shape of a range that stops too early.
 - Pick a value, leave the player, and come back to the same title. The value must be remembered.
-- Open a different title and confirm it starts from the value last chosen, then set its own. Going
-  back to the first title must restore the first value: brightness is remembered per title because
-  HDR and SDR want very different numbers and nothing in the app reliably says which is playing.
+- Open a different title and confirm it starts from the default for _its_ dynamic range, then set
+  its own. Going back to the first title must restore the first value: a per-title choice outranks
+  both defaults, so anything watched twice keeps exactly what was chosen for it.
 - For a series, confirm episodes of the same series share one value.
-- In the `HLS` section, note what `video range` and `display` report. `video range` is read from the
-  manifest's `VIDEO-RANGE` attribute and is expected to say `not declared` — if it ever says `PQ` or
-  `HLG` on HDR content, automatic brightness selection becomes possible and is worth reporting.
-  `display` reports whether the panel can show HDR, which is not the same question.
+- In the `HLS` section, confirm `video range` reads `PQ` (or `HLG`) on HDR content and `SDR` — or
+  `not declared` — otherwise. This is what now selects the brightness default and drives the `HDR`
+  badge, so a wrong reading here is a wrong reading everywhere.
+- Confirm the `HDR` badge appears on HDR titles and **not** on SDR ones. It used to be a codec guess
+  that treated every HEVC stream as HDR; if it now appears on plainly-SDR content, `VIDEO-RANGE` is
+  not saying what we think.
+- Start an HDR title that has never been opened and confirm subtitles begin at 25% rather than
+  needing to be dimmed by hand; start an SDR one and confirm 75%.
+- Adjust brightness on an HDR title, then open a _different_ SDR title, and confirm its default did
+  not move. The two defaults are stored separately on purpose.
+- Note that the range is polled, so on a fresh title the default may settle a second or two into
+  playback. Subtitles appearing at the wrong brightness and staying there is a bug; a brief
+  adjustment at the very start is expected.
 - Confirm the diagnostics panel text is a shade less blinding than before in HDR mode. It is grey
   rather than pure white now, since pure white is what an HDR display maps to peak brightness.
 

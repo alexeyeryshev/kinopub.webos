@@ -834,17 +834,22 @@ Ordered by priority, then by what unblocks what.
 > detection entirely for anything watched twice; and the diagnostics panel is grey rather than pure
 > white, which is what an HDR display maps to peak brightness.
 >
-> **Not done, and why.** Selecting the value automatically needs to know whether HDR is playing, and
-> `src/utils/hdr.ts` documents why nothing available answers that today: the codec guess is wrong
-> (HEVC is not HDR), the `dynamic-range` media query reports a display capability rather than the
-> current mode, the pinned hls.js does not parse `VIDEO-RANGE`, and the API exposes no per-file
-> flag. The overlay now reports the two signals that might exist, so the question can be answered
-> from a capture instead of guessed at. Also still open: whether reducing the cue _colour_ would
-> beat reducing its opacity — opacity fades the cue background along with the text, costing contrast
-> on bright scenes, while a dimmer colour lowers emitted luminance and keeps it. That is a change of
-> mechanism and wants a device before it is made.
+> **Then the signal turned out to exist.** The overlay was given the two candidate signals precisely
+> to find out, and `video range: PQ` was read off two HDR titles on the TV. So `VIDEO-RANGE` _is_
+> declared in these manifests — hls.js preserves it on `level.attrs` even though it does not parse
+> it — and selecting the brightness automatically no longer requires a guess. HDR titles now default
+> to 25% and SDR to 75%, stored separately, with any per-title choice still outranking both. The
+> `HDR` badge moved to the same signal, retiring the codec guess the review flagged: it treated
+> every HEVC stream as HDR.
+>
+> **Still open:** whether reducing the cue _colour_ would beat reducing its opacity. Opacity fades
+> the cue background along with the text, costing contrast on bright scenes, while a dimmer colour
+> lowers emitted luminance and keeps it. That is a change of mechanism and wants a device before it
+> is made. Also unvalidated: that `VIDEO-RANGE` reads `SDR` rather than being absent on SDR titles.
+> If it is simply missing there, the fallback still lands on the SDR default so the brightness comes
+> out right, but the `HDR` badge would stay silent where it should be.
 
-- **Status:** Partially implemented — automatic selection blocked on device evidence
+- **Status:** Implemented — validation on device outstanding
 - **Priority:** Medium
 - **Category:** Subtitles / HDR
 - **Origin:** Item 5's unperformed reproduction steps; review §4.8
