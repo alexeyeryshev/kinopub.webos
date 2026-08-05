@@ -194,6 +194,10 @@ function useVideoPlayer({
   // aside without reading state it writes itself.
   const fatalRetryPendingRef = useRef(false);
   const currentAudioTrackIndexRef = useRef(0);
+  // Set by the stall watchdog immediately before it refetches the playlist, and cleared by the
+  // `MANIFEST_PARSED` handler that reads it. Distinguishes "this manifest is new" from "this
+  // manifest is the same one, fetched again to recover" -- see the level assignment there.
+  const manifestReloadRef = useRef(false);
   // Decode health is sampled continuously, not only while the diagnostics overlay is open, because
   // the indicator it drives is the whole point: a viewer should not have to open diagnostics to
   // learn the decoder is struggling.
@@ -443,6 +447,7 @@ function useVideoPlayer({
       fatalRecoveryRef.current = { attempts: 0, limit: RECOVERY_MAX_NETWORK_ATTEMPTS, exhausted: false };
       stallRecoveryRef.current = { attempts: 0, limit: STALL_MAX_ACTIONS, exhausted: false };
       fatalRetryPendingRef.current = false;
+      manifestReloadRef.current = false;
       decodeSamplesRef.current = [];
       decodeErrorTimesRef.current = [];
       decodeHealthRef.current = EMPTY_DECODE_HEALTH;
@@ -687,8 +692,28 @@ function useVideoPlayer({
             hls.audioTrack = hlsAudioTrack.id;
           }
 
+          // Which property carries the level depends on why this manifest arrived.
+          //
+          // `currentLevel` applies the choice by flushing the entire buffer, which is exactly what
+          // is wanted on a fresh source -- there is nothing to lose and playback starts pinned to
+          // the requested quality from its first fragment. `setSourceTrack` already avoids it for
+          // in-place quality changes for the opposite reason.
+          //
+          // A watchdog reload is a recovery, and it reaches here too: it refetches the same playlist
+          // to get new segment URLs. Flushing there discards buffered ranges the stall did not cost
+          // us -- content beyond a gap, which is precisely the post-seek shape the CDN failures were
+          // captured in -- while trying to recover from the stall. `nextLevel` pins the same level
+          // from the next fragment without touching what is already buffered.
+          const isReload = manifestReloadRef.current;
+          manifestReloadRef.current = false;
+
           if (isAdaptive && qualityModeRef.current === 'auto') {
-            hls.currentLevel = -1;
+            if (isReload) {
+              hls.nextLevel = -1;
+            } else {
+              hls.currentLevel = -1;
+            }
+
             return;
           }
 
@@ -701,7 +726,11 @@ function useVideoPlayer({
           if (isAdaptive) {
             const levelIndex = findLevelIndexForQuality(hls.levels, currentSourceTrackRef.current?.name || '');
             if (levelIndex !== -1) {
-              hls.currentLevel = levelIndex;
+              if (isReload) {
+                hls.nextLevel = levelIndex;
+              } else {
+                hls.currentLevel = levelIndex;
+              }
             }
           }
         });
@@ -879,6 +908,9 @@ function useVideoPlayer({
         lastReason: 'stall / reload',
         lastAt: now,
       };
+      // Tells `MANIFEST_PARSED` that this manifest is a recovery rather than a new source, so it
+      // pins the level without flushing what is still buffered.
+      manifestReloadRef.current = true;
       hls.loadSource(currentSrc);
       hls.startLoad(position);
     }, STALL_CHECK_INTERVAL);

@@ -530,7 +530,14 @@ Ordered by priority, then by what unblocks what.
 
 ### A7 — Stop the watchdog's playlist reload from flushing the buffer
 
-- **Status:** Open
+> **Implemented.** The watchdog marks the reload before `loadSource`, and `MANIFEST_PARSED` pins the
+> level through `nextLevel` on a reload and `currentLevel` on a fresh source — so a recovery keeps
+> whatever is still buffered, while a normal start still pins quality from its first fragment. Both
+> the Auto (`-1`) and fixed-level branches were assigning `currentLevel`, so both had to move.
+> **Validation on device outstanding:** the acceptance criteria below are two-sided, and the second
+> one — quality still pinned on a normal start — is the side that has broken silently before.
+
+- **Status:** Implemented — validation on device outstanding
 - **Priority:** Medium
 - **Category:** Playback recovery
 - **Origin:** Review §4.3
