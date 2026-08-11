@@ -4,6 +4,7 @@ import { Switch, useHistory } from 'react-router-dom';
 import Spinner from 'components/spinner';
 import Text from 'components/text';
 import useButtonEffect from 'hooks/useButtonEffect';
+import useDefaultDeviceSettingsEffect from 'hooks/useDefaultDeviceSettingsEffect';
 import useDeviceAuthorizationEffect, { AuthorizationStep } from 'hooks/useDeviceAuthorizationEffect';
 import { PATHS } from 'routes';
 
@@ -53,6 +54,7 @@ const Views: React.FC = ({ children, ...props }) => {
 
   useButtonEffect('Back', handleBackButtonClick);
   useDeviceAuthorizationEffect(handleAuthorization);
+  useDefaultDeviceSettingsEffect(authorizationStep === 'authorized');
 
   if (showSpinner) {
     return <Spinner />;

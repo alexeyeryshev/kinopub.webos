@@ -22,6 +22,7 @@ export function mapAudios(audios: Audio[], ac3ByDefault?: boolean, savedAudioNam
       name,
       number,
       lang: audio.lang,
+      index: audio.index,
       default: (savedAudioName && savedAudioName === name) || (!savedAudioName && ac3ByDefault && audio.codec === 'ac3'),
     };
   });

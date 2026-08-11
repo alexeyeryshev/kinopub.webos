@@ -1,16 +1,24 @@
 import React, { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import cx from 'classnames';
 import HLS from 'hls.js';
-import forEach from 'lodash/forEach';
+import map from 'lodash/map';
 
 import useStorageState from 'hooks/useStorageState';
+import { Logger } from 'logger';
 
 import { convertToVTT } from 'utils/subtitles';
+
+const logger = new Logger('media');
 
 export type AudioTrack = {
   name: string;
   number: string;
   lang: string;
+  /**
+   * Индекс дорожки из метаданных kinopub. Не обязан совпадать с позицией в массиве,
+   * поэтому логируем оба значения, пока нумерация в ссылках hls1 не сверена с реальными данными
+   */
+  index?: number;
   default?: boolean;
 };
 
@@ -31,6 +39,53 @@ export type SubtitleTrack = {
 };
 
 export type StreamingType = 'http' | 'hls' | 'hls2' | 'hls4';
+
+type PlayerAudioTrack = { lang?: string };
+
+type NativeAudioTrack = { language?: string; label?: string; enabled: boolean };
+
+// Номер аудиодорожки в ссылке на плейлист hls1. Без флага `g`, чтобы `test` не зависел от предыдущих вызовов
+const HLS1_AUDIO_TRACK_RE = /master-v1a\d+/;
+
+const LANGS: Record<string, string> = { ru: 'rus', rus: 'rus', en: 'eng', eng: 'eng', uk: 'ukr', ukr: 'ukr' };
+
+const normalizeLang = (lang?: string) => {
+  const [code] = (lang || '').trim().toLowerCase().split(/[-_]/);
+
+  return LANGS[code] || code;
+};
+
+const getNativeAudioTracks = (media?: HTMLVideoElement | null) =>
+  Array.from((media as unknown as { audioTracks?: ArrayLike<NativeAudioTrack> })?.audioTracks || []);
+
+/**
+ * Ищет дорожку плеера, соответствующую выбранной дорожке из метаданных.
+ * Дорожек в плейлисте бывает меньше, чем в метаданных (часть файлов недоступна устройству),
+ * поэтому индекс из метаданных проверяем по языку и при расхождении ищем дорожку с тем же языком
+ */
+export function findPlayerAudioTrackIndex(playerTracks: PlayerAudioTrack[], audioTracks: AudioTrack[] = [], index: number) {
+  const audioTrack = audioTracks[index];
+
+  if (!playerTracks.length || !audioTrack) {
+    return -1;
+  }
+
+  const lang = normalizeLang(audioTrack.lang);
+  const playerTrack = playerTracks[index];
+
+  if (playerTrack && (!lang || !playerTrack.lang || normalizeLang(playerTrack.lang) === lang)) {
+    return index;
+  }
+
+  // n-ой дорожке с этим языком в метаданных соответствует n-ая дорожка с этим языком в плейлисте
+  const position = audioTracks.slice(0, index).filter((track) => normalizeLang(track.lang) === lang).length;
+  const indexes = playerTracks.reduce<number[]>(
+    (result, track, idx) => (normalizeLang(track.lang) === lang ? [...result, idx] : result),
+    [],
+  );
+
+  return indexes.length ? indexes[Math.min(position, indexes.length - 1)] : -1;
+}
 
 type OwnProps = {
   autoPlay?: boolean;
@@ -153,10 +208,26 @@ function useVideoPlayer({
   const currentSrc = useMemo(
     () =>
       streamingType === 'hls'
-        ? currentSourceTrack?.src.replace(/master-v1a\d/, `master-v1a${currentAudioTrackIndex + 1}`)
+        ? currentSourceTrack?.src.replace(HLS1_AUDIO_TRACK_RE, `master-v1a${currentAudioTrackIndex + 1}`)
         : currentSourceTrack?.src,
     [streamingType, currentAudioTrackIndex, currentSourceTrack?.src],
   );
+
+  // В hls1 звук выбирается номером дорожки в ссылке, и проверить попадание по плееру нечем:
+  // если шаблон не совпал, подстановка молча ничего не делает и играет дорожка по умолчанию
+  useEffect(() => {
+    const src = currentSourceTrack?.src;
+
+    if (streamingType !== 'hls' || !src || HLS1_AUDIO_TRACK_RE.test(src)) {
+      return;
+    }
+
+    logger.warn('hls1 audio track substitution did not match the url', {
+      src,
+      audioTrack: audioTracks?.[currentAudioTrackIndex]?.name,
+      quality: currentSourceTrack?.name,
+    });
+  }, [streamingType, currentSourceTrack, currentAudioTrackIndex, audioTracks]);
 
   const handleMediaLoaded = useCallback(() => {
     if (videoRef.current) {
@@ -179,7 +250,7 @@ function useVideoPlayer({
 
   useEffect(() => {
     if (videoRef.current && currentSrc) {
-      if (isHLSJSActive !== false && currentSrc.includes('.m3u8') && HLS.isSupported()) {
+      if (isHLSJSActive && currentSrc.includes('.m3u8') && HLS.isSupported()) {
         const hls = (hlsRef.current = new HLS({
           enableWebVTT: false,
           enableCEA708Captions: false,
@@ -222,27 +293,49 @@ function useVideoPlayer({
   }, [currentSrc, isHLSJSActive, handleMediaLoaded]);
 
   useEffect(() => {
-    if (isLoaded) {
-      if (hlsRef.current) {
-        const hlsAudioTrack = hlsRef.current.audioTracks?.[currentAudioTrackIndex];
-
-        if (hlsAudioTrack) {
-          hlsRef.current.audioTrack = hlsAudioTrack.id;
-        }
-      } else if (videoRef.current) {
-        // Do not change audio if we don't have it (mostly on HLS)
-        // @ts-expect-error
-        if (videoRef.current.audioTracks?.[currentAudioTrackIndex]) {
-          // @ts-expect-error
-          forEach(videoRef.current.audioTracks, (audioTrack, idx: number) => {
-            audioTrack.enabled = idx === currentAudioTrackIndex;
-          });
-
-          videoRef.current.currentTime -= 1;
-        }
-      }
+    // в hls1 звук переключается сменой ссылки на плейлист, см. currentSrc
+    if (!isLoaded || streamingType === 'hls') {
+      return;
     }
-  }, [isLoaded, currentAudioTrackIndex]);
+
+    const hls = hlsRef.current;
+
+    if (hls) {
+      const hlsAudioTrack = hls.audioTracks?.[findPlayerAudioTrackIndex(hls.audioTracks || [], audioTracks, currentAudioTrackIndex)];
+
+      if (hlsAudioTrack) {
+        hls.audioTrack = hlsAudioTrack.id;
+      } else {
+        logger.warn('audio track is not available in the playlist', {
+          audioTrack: audioTracks?.[currentAudioTrackIndex]?.name,
+          playlistTracks: map(hls.audioTracks, 'name'),
+        });
+      }
+
+      return;
+    }
+
+    const nativeAudioTracks = getNativeAudioTracks(videoRef.current);
+    const nativeAudioTrackIndex = findPlayerAudioTrackIndex(
+      map(nativeAudioTracks, ({ language }) => ({ lang: language })),
+      audioTracks,
+      currentAudioTrackIndex,
+    );
+
+    if (nativeAudioTrackIndex !== -1) {
+      nativeAudioTracks.forEach((audioTrack, idx) => {
+        audioTrack.enabled = idx === nativeAudioTrackIndex;
+      });
+
+      videoRef.current!.currentTime -= 1;
+    } else {
+      // Нативный плеер webOS обычно не отдаёт дорожки HLS, переключить звук без hls.js нечем
+      logger.warn('native player has no audio tracks to switch, enable HLS.js in settings', {
+        audioTrack: audioTracks?.[currentAudioTrackIndex]?.name,
+        nativeTracks: nativeAudioTracks.length,
+      });
+    }
+  }, [isLoaded, currentAudioTrackIndex, audioTracks, streamingType]);
 
   useEffect(() => {
     if (isLoaded) {

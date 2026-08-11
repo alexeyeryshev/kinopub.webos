@@ -1,9 +1,12 @@
+import { DEFAULT_SETTINGS } from 'appDefaults';
+
 export type Value = object | string | number | boolean | null;
 
 export type Key =
   | 'is_logged'
   | 'access_token'
   | 'refresh_token'
+  | 'is_default_device_settings_applied'
   | 'streaming_type'
   | 'is_hls.js_active'
   | 'is_ac3_by_default_active'
@@ -54,11 +57,13 @@ export class MyStorage<TKeys extends string = string> {
   private prefix: string;
   private listeners: (() => void)[];
   private storage: Storage;
+  private defaults: Partial<Record<TKeys, Value>>;
 
-  constructor(prefix: string, storage: Storage = window.localStorage) {
+  constructor(prefix: string, storage: Storage = window.localStorage, defaults: Partial<Record<TKeys, Value>> = {}) {
     this.prefix = prefix;
     this.listeners = [];
     this.storage = storage;
+    this.defaults = defaults;
   }
 
   private emit() {
@@ -76,7 +81,7 @@ export class MyStorage<TKeys extends string = string> {
   };
 
   getItem = <T extends Value>(key: TKeys): T => {
-    return getItem(this.storage, this.prefix, key);
+    return getItem(this.storage, this.prefix, key) ?? (this.defaults[key] as T);
   };
 
   setItem = <T extends Value>(key: TKeys, value: T, expire?: number) => {
@@ -94,6 +99,6 @@ export class MyStorage<TKeys extends string = string> {
   };
 }
 
-export default new MyStorage<Key>('kinopub');
+export default new MyStorage<Key>('kinopub', window.localStorage, DEFAULT_SETTINGS);
 
 export const createSessionStorage = <Key extends string>(prefix: string = 'kinopub') => new MyStorage<Key>(prefix, window.sessionStorage);
