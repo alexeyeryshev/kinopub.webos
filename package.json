@@ -8,8 +8,8 @@
   "license": "MIT",
   "private": true,
   "scripts": {
-    "start": "craco start",
-    "build": "craco build",
+    "start": "NODE_OPTIONS=--openssl-legacy-provider craco start",
+    "build": "NODE_OPTIONS=--openssl-legacy-provider craco build",
     "postbuild": "dotenv-load node ./scripts/msx.js",
     "package": "dotenv-load node ./scripts/package.js",
     "test": "craco test",
