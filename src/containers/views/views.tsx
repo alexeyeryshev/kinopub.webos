@@ -13,6 +13,7 @@ const Views: React.FC = ({ children, ...props }) => {
   const [showNotice, setShowNotice] = useState(false);
   const [showSpinner, setShowSpinner] = useState(true);
   const [authorizationStep, setAuthorizationStep] = useState<AuthorizationStep>();
+  const [authorizationError, setAuthorizationError] = useState<string>();
 
   const handleBackButtonClick = useCallback(() => {
     if (history.location.pathname !== PATHS.Home) {
@@ -29,8 +30,9 @@ const Views: React.FC = ({ children, ...props }) => {
   }, [history, showNotice]);
 
   const handleAuthorization = useCallback(
-    (authorizationStep: AuthorizationStep) => {
+    (authorizationStep: AuthorizationStep, error?: string) => {
       setAuthorizationStep(authorizationStep);
+      setAuthorizationError(error);
 
       const path = history.location.pathname;
       if (authorizationStep === 'authorized') {
@@ -55,6 +57,17 @@ const Views: React.FC = ({ children, ...props }) => {
   useButtonEffect('Back', handleBackButtonClick);
   useDeviceAuthorizationEffect(handleAuthorization);
   useDefaultDeviceSettingsEffect(authorizationStep === 'authorized');
+
+  if (authorizationStep === 'error') {
+    return (
+      <div className="w-screen h-screen flex flex-col justify-center items-center text-gray-200 text-center">
+        <Text>Не удалось связаться с сервером kino.watch</Text>
+        <br />
+        <Text>Проверьте подключение к интернету и дату на телевизоре, затем перезапустите приложение</Text>
+        {authorizationError && <div className="mt-8 text-sm text-gray-500">{authorizationError}</div>}
+      </div>
+    );
+  }
 
   if (showSpinner) {
     return <Spinner />;
