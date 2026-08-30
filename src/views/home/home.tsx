@@ -68,35 +68,56 @@ const NewTVShows: React.FC = () => {
   return <ItemsSection title="Новые ТВ шоу" params={{ type: 'tvshow', sort: 'created-' }} />;
 };
 
+const CONTINUE_WATCHING_LIMIT = 4;
+
+// Доля длительности, после которой считаем серию/фильм досмотренными и не предлагаем продолжить
+const WATCHED_THRESHOLD = 0.9;
+
 const ContinueWatching: React.FC = () => {
   const history = useHistory();
+  // История — единственный источник, который знает, где именно остановился просмотр:
+  // в /watching лежат сериалы с новыми эпизодами, а не то, что смотрели последним.
+  // perpage ограничен 50 (максимум по документации API)
+  const { data: historyData, isLoading: historyLoading } = useApi('history', [1, 50]);
   const { data: serials, isLoading: serialsLoading } = useApi('watchingSerials');
   const { data: movies, isLoading: moviesLoading } = useApi('watchingMovies');
-  const { data: historyData, isLoading: historyLoading } = useApi('history', [0, 100]);
-  const items = useMemo(() => {
-    const watchingItems = [...(serials?.items || []), ...(movies?.items || [])];
-    if (!watchingItems.length) return [];
 
-    const watchingIds = new Set(watchingItems.map((i) => i.id));
+  const items = useMemo(() => {
+    // Счётчик недосмотренных эпизодов отдаёт только /watching, в истории его нет
+    const episodesLeft = new Map<string, Item['new']>();
+
+    for (const item of [...(serials?.items || []), ...(movies?.items || [])]) {
+      episodesLeft.set(item.id, item.new);
+    }
 
     const seen = new Set<string>();
     const ordered: Item[] = [];
 
-    for (const h of historyData?.history || []) {
-      const id = h.item?.id;
-      if (id && watchingIds.has(id) && !seen.has(id)) {
-        seen.add(id);
-        ordered.push(h.item);
+    for (const record of historyData?.history || []) {
+      const item = record.item;
+
+      if (!item?.id || seen.has(item.id)) {
+        continue;
       }
+
+      // В /v1/history у media нет поля watching: позиция остановки лежит в самой записи,
+      // поэтому недосмотренность считаем по record.time и длительности
+      const duration = record.media?.duration || 0;
+      const isInProgress = record.time > 0 && (!duration || record.time < duration * WATCHED_THRESHOLD);
+      const left = episodesLeft.get(item.id);
+
+      if (!isInProgress && !left) {
+        continue;
+      }
+
+      seen.add(item.id);
+      ordered.push({ ...item, new: left });
     }
 
-    for (const item of watchingItems) {
-      if (!seen.has(item.id)) ordered.push(item);
-    }
+    return ordered.slice(0, CONTINUE_WATCHING_LIMIT);
+  }, [historyData?.history, serials?.items, movies?.items]);
 
-    return ordered.slice(0, 4).map((item) => ({ ...item, new: undefined }));
-  }, [serials?.items, movies?.items, historyData?.history]);
-  const isLoading = serialsLoading || moviesLoading || historyLoading;
+  const isLoading = historyLoading || serialsLoading || moviesLoading;
 
   const handleShowAll = useCallback(() => {
     history.push(generatePath(PATHS.Watching, { watchingType: 'serials' }));
