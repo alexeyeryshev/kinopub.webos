@@ -82,3 +82,22 @@ export function getItemDescription(item?: ItemDetails, video?: Video, season?: S
 export function getItemQualityIcon(item?: ItemDetails) {
   return item?.quality ? (item.quality === 2160 ? '4k' : item.quality === 1080 || item.quality === 720 ? 'hd' : 'sd') : null;
 }
+
+/**
+ * Highest quality actually available for a single episode.
+ *
+ * The badge on the item is an aggregate over the whole show - a serial counts as 4K when most of
+ * its episodes are, so a freshly added episode that has not been re-encoded yet still sits under
+ * a 4k badge and silently plays at 1080p
+ */
+export function getVideoQualityLabel(video?: Video) {
+  const heights = (video?.files || []).map((file) => parseInt(file.quality, 10)).filter((height) => !isNaN(height));
+
+  if (!heights.length) {
+    return null;
+  }
+
+  const height = Math.max(...heights);
+
+  return height >= 2160 ? '4K' : `${height}p`;
+}

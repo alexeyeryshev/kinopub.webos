@@ -12,6 +12,7 @@ import useHashTrigger from 'hooks/useHashTrigger';
 import { PATHS, generatePath } from 'routes';
 
 import { secondsToDuration } from 'utils/date';
+import { getVideoQualityLabel } from 'utils/item';
 
 type Props = {
   item: Item;
@@ -178,6 +179,11 @@ const EpisodePicker: React.FC<Props> = ({ item, seasons, visible, onClose, onEpi
                       <Text className="truncate">{episode.title || `Эпизод ${episode.number}`}</Text>
                     </div>
                     <div className="flex items-center flex-shrink-0 ml-4">
+                      {getVideoQualityLabel(episode) && (
+                        <Text className="text-gray-400 text-xs mr-3 px-1 border border-gray-600 rounded">
+                          {getVideoQualityLabel(episode)}
+                        </Text>
+                      )}
                       {episode.duration > 0 && <Text className="text-gray-400 text-xs mr-3">{secondsToDuration(episode.duration)}</Text>}
                       {episode.watched === WatchingStatus.Watched && <Text className="text-green-500 text-xs">✓</Text>}
                       {episode.watching?.status === WatchingStatus.Watching && <Text className="text-yellow-500 text-xs">▶</Text>}
