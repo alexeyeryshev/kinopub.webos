@@ -26,10 +26,9 @@ const SubscriptionNotice: React.FC = () => {
     return null;
   }
 
-  // days бывает дробным, поэтому неполный день считаем уже законченной подпиской
-  const days = Math.floor(subscription.days);
-
-  if (subscription.active && days >= 1) {
+  // Ориентируемся только на active: days и end_time kinopub возвращает нулями
+  // даже при активной подписке, и проверка по ним показывала баннер оплатившим
+  if (subscription.active) {
     return null;
   }
 
