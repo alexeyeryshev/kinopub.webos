@@ -45,7 +45,7 @@ const NewMovies: React.FC = () => {
 };
 
 const PopularSerials: React.FC = () => {
-  return <ItemsSection title="Популярные сериалы" params={{ type: 'serial', sort: 'watchers-' }} />;
+  return <ItemsSection title="Популярные сериалы" params={{ type: 'serial', sort: 'watchers-', conditions: [`updated>=${lastMonth}`] }} />;
 };
 
 const NewSerials: React.FC = () => {
