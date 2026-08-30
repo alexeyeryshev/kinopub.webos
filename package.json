@@ -70,6 +70,7 @@
     "@types/react-router-dom": "5.1.8",
     "@typescript-eslint/eslint-plugin": "4.30.0",
     "@typescript-eslint/parser": "4.30.0",
+    "@webos-tools/cli": "3.2.5",
     "@webosose/ares-cli": "2.2.0",
     "babel-eslint": "10.1.0",
     "concurrently": "6.2.1",

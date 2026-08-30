@@ -38,36 +38,57 @@ GENERATE_SOURCEMAP=false NODE_OPTIONS=--openssl-legacy-provider yarn build
 
 ### Installing on a TV
 
-`yarn deploy` installs the packaged app onto a TV over the network — the scripted equivalent of
-dropping an `.ipk` onto webOS Dev Manager. It uses the `@webosose/ares-cli` that already ships with
-the project, so no separate SDK installation is needed.
+`yarn deploy` installs the app onto a TV over the network - the scripted equivalent of dropping an
+`.ipk` onto webOS Dev Manager.
 
 ```bash
 yarn build && yarn package && yarn deploy
 ```
 
-| Flag              | Description                                                                                    |
-| ----------------- | ---------------------------------------------------------------------------------------------- |
-| `--target <id>`   | Variant to install: `netflix`, `amazon`, `ivi`, `youtube`, `ui30`. Defaults to the main app id |
-| `--device <name>` | TV to install on. Defaults to the device marked as default                                     |
-| `--launch`        | Launch the app on the TV after installing                                                      |
+Or install a published release without building anything:
 
-The `.ipk` is chosen by the version in `package.json`, so run `yarn package` again after bumping it.
+```bash
+yarn deploy --release
+```
+
+| Flag                  | Description                                                                                                          |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `--target <id>`       | Variant to install: `rakuten` (alias for `ui30`), `netflix`, `amazon`, `ivi`, `youtube`. Defaults to the main app id |
+| `--release [tag]`     | Install a published release instead of a local build. Without a tag, the latest one                                  |
+| `--repo <owner/name>` | Repository to take releases from. Defaults to the remote of the current branch                                       |
+| `--device <name>`     | TV to install on. Defaults to the device marked as default                                                           |
+| `--launch`            | Launch the app on the TV after installing                                                                            |
+
+`--target rakuten` builds and installs under the `ui30` app id, which is Rakuten TV - installing over
+it binds the app to the Rakuten button on the remote.
+
+Without `--release`, the `.ipk` is chosen by the version in `package.json`, so run `yarn package`
+again after bumping it.
+
+Installing uses `@webos-tools/cli` (LG's TV CLI) rather than the `@webosose/ares-cli` that builds the
+package. The OSE build expects a different permission layout and fails on a retail TV with
+`rm: can't remove '/media/developer/temp': Permission denied`. Both packages install identically
+named `ares-*` binaries, so the script calls the TV CLI by full path.
 
 #### One-time TV setup
 
-Enable Developer Mode on the TV, then register it once:
+Enable Developer Mode on the TV along with its key server, then register the TV once:
 
 ```bash
-npx ares-setup-device --add tv --info "{'host':'<TV IP>','port':'9922','username':'prisoner','privatekey':'<key file in ~/.ssh>','passphrase':'<passphrase>'}"
+npx ares-setup-device --add tv --info "{'host':'<TV IP>','port':'9922','username':'prisoner'}"
 ```
 
-The Developer Mode app on the TV shows the IP and the passphrase. It has to stay open while you
-install — the session expires after about 50 hours, and once it does the TV still answers ping but
-refuses port 9922.
+```bash
+npx ares-novacom --device tv --getkey
+```
+
+The second command asks for the passphrase shown in the Developer Mode app. The app has to stay open
+while you install - the session expires after about 50 hours, and once it does the TV still answers
+ping but refuses port 9922.
 
 List registered devices with `npx ares-setup-device --listfull`; plain `--list` prints an empty table
-in this version of the CLI even when devices exist.
+in this version of the CLI even when devices exist. Set the TV as the default target with
+`npx ares-setup-device --default <name>`, otherwise installs go to the emulator.
 
 ## Screenshots
 
