@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Switch, useHistory } from 'react-router-dom';
 
 import Spinner from 'components/spinner';
+import SubscriptionNotice from 'components/subscriptionNotice';
 import Text from 'components/text';
 import useButtonEffect from 'hooks/useButtonEffect';
 import useDefaultDeviceSettingsEffect from 'hooks/useDefaultDeviceSettingsEffect';
@@ -71,6 +72,7 @@ const Views: React.FC = ({ children, ...props }) => {
           </Text>
         </div>
       )}
+      {authorizationStep === 'authorized' && <SubscriptionNotice />}
       <Switch>{children}</Switch>
     </div>
   );
