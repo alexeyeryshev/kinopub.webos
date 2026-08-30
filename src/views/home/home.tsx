@@ -34,10 +34,21 @@ const ItemsSection: React.FC<{ title: string; params: ItemsParams }> = ({ title,
   );
 };
 
-const lastMonth = dayjs().add(-1, 'month').unix();
+/**
+ * Граница окна для подборок «Популярные».
+ *
+ * Считаем на монтировании, а не на загрузке модуля: приложение на телевизоре не перезапускают
+ * неделями, и окно иначе застывает на дате запуска. Мемоизация обязательна — значение попадает
+ * в ключ запроса, и пересчёт на каждый рендер запускал бы перезагрузку подборок раз в секунду
+ */
+function useMonthAgo() {
+  return useMemo(() => dayjs().add(-1, 'month').unix(), []);
+}
 
 const PopularMovies: React.FC = () => {
-  return <ItemsSection title="Популярные фильмы" params={{ type: 'movie', sort: 'views-', conditions: [`created>=${lastMonth}`] }} />;
+  const monthAgo = useMonthAgo();
+
+  return <ItemsSection title="Популярные фильмы" params={{ type: 'movie', sort: 'views-', conditions: [`created>=${monthAgo}`] }} />;
 };
 
 const NewMovies: React.FC = () => {
@@ -45,7 +56,9 @@ const NewMovies: React.FC = () => {
 };
 
 const PopularSerials: React.FC = () => {
-  return <ItemsSection title="Популярные сериалы" params={{ type: 'serial', sort: 'watchers-', conditions: [`updated>=${lastMonth}`] }} />;
+  const monthAgo = useMonthAgo();
+
+  return <ItemsSection title="Популярные сериалы" params={{ type: 'serial', sort: 'watchers-', conditions: [`updated>=${monthAgo}`] }} />;
 };
 
 const NewSerials: React.FC = () => {
