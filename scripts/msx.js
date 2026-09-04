@@ -28,7 +28,7 @@ const createMSXConfig = (url) => ({
             important: true,
             action: 'update:content:description',
             data: {
-              text: ['{txt:msx-white: KinoPub} — Приложения позволяет смотреть сериалы, фильмы, мультфильмы и т. д. с сайта kino.pub.'],
+              text: ['{txt:msx-white: KinoPub} — Приложения позволяет смотреть сериалы, фильмы, мультфильмы и т. д. с сайта kino.watch.'],
             },
           },
         },

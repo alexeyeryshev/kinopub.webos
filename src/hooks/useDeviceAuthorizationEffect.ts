@@ -8,9 +8,9 @@ import { PATHS, generatePath } from 'routes';
 
 import { logException } from 'utils/logging';
 
-export type AuthorizationStep = 'processing' | 'pair' | 'authorized';
+export type AuthorizationStep = 'processing' | 'pair' | 'authorized' | 'error';
 
-function useDeviceAuthorizationEffect(onAuthorization?: (authorizationStep: AuthorizationStep) => void) {
+function useDeviceAuthorizationEffect(onAuthorization?: (authorizationStep: AuthorizationStep, error?: string) => void) {
   const history = useHistory();
   const deviceInfo = useDeviceInfo();
   const { deviceAuthorizationAsync } = useApiMutation('deviceAuthorization');
@@ -51,6 +51,7 @@ function useDeviceAuthorizationEffect(onAuthorization?: (authorizationStep: Auth
         onAuthorization?.('authorized');
       } catch (ex) {
         logException(ex);
+        onAuthorization?.('error', `${ex}`);
       }
     }, 500);
 
