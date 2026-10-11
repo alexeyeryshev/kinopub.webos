@@ -46,6 +46,11 @@ const KINOPUB_API_BASE_URL = process.env.KINOPUB_API_BASE_URL || 'https://api.se
 const KINOPUB_API_CLIENT_ID = process.env.KINOPUB_API_CLIENT_ID || 'xbmc';
 const KINOPUB_API_CLIENT_SECRET = process.env.KINOPUB_API_CLIENT_SECRET || 'cgg3gtifu46urtfp2zp1nqtba0k2ezxh';
 
+const AUTHORIZATION_MAX_RETRIES = 5;
+const AUTHORIZATION_RETRY_DELAY = 3000;
+
+const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 class KinopubApiClient extends BaseApiClient {
   private clientId: string;
 
@@ -162,7 +167,7 @@ class KinopubApiClient extends BaseApiClient {
   /**
    * Авторизация устройства
    */
-  async deviceAuthorization(deviceInfo: DeviceInfo, onConfirm?: OnConfirm): Promise<void> {
+  async deviceAuthorization(deviceInfo: DeviceInfo, onConfirm?: OnConfirm, retry: number = 0): Promise<void> {
     this.clearTimers();
 
     const refreshToken = this.getRefreshToken();
@@ -170,13 +175,23 @@ class KinopubApiClient extends BaseApiClient {
     if (refreshToken) {
       const response = await this.refreshTokens(refreshToken);
 
-      return this.processTokensReponse(response, deviceInfo);
-    } else {
       try {
-        return await this.requestUserCode(deviceInfo, onConfirm);
+        return await this.processTokensReponse(response, deviceInfo);
       } catch (ex) {
-        return this.deviceAuthorization(deviceInfo, onConfirm);
+        // Протухший refresh_token не должен блокировать вход — заново привязываем устройство
       }
+    }
+
+    try {
+      return await this.requestUserCode(deviceInfo, onConfirm);
+    } catch (ex) {
+      if (retry >= AUTHORIZATION_MAX_RETRIES) {
+        throw ex;
+      }
+
+      await delay(AUTHORIZATION_RETRY_DELAY);
+
+      return this.deviceAuthorization(deviceInfo, onConfirm, retry + 1);
     }
   }
 
