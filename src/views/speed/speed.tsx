@@ -1,11 +1,21 @@
 import React, { useCallback, useEffect, useMemo, useReducer, useState } from 'react';
 import map from 'lodash/map';
+import sample from 'lodash/sample';
 
 import Button from 'components/button';
 import Seo from 'components/seo';
 import Text from 'components/text';
 import Title from 'components/title';
-import useApi from 'hooks/useApi';
+
+/**
+ * Серверы для замера скорости.
+ * Совпадают с теми, что использует замер на сайте kino.pub (zamerka.com):
+ * несколько пронумерованных хостов на регион, номер выбирается случайно.
+ */
+const SPEEDTEST_SERVERS = [
+  { name: 'Амстердам', location: 'ams', hosts: ['01', '02', '03'] },
+  { name: 'Москва', location: 'msk', hosts: ['05', '06', '07'] },
+];
 
 function updateSpeedReducer(state: { [location: string]: string }, action: { type: string; payload: string }) {
   return {
@@ -15,7 +25,6 @@ function updateSpeedReducer(state: { [location: string]: string }, action: { typ
 }
 
 const SpeedView: React.FC = () => {
-  const { data } = useApi('serverLocations');
   const [speed, setSpeed] = useReducer(updateSpeedReducer, {});
   const [started, setStarted] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -23,16 +32,16 @@ const SpeedView: React.FC = () => {
 
   const servers = useMemo(
     () =>
-      map(data?.items, ({ name, location }) => ({
+      map(SPEEDTEST_SERVERS, ({ name, location, hosts }) => ({
         name,
         location,
-        server: `https://${location}-speed.streambox.in`,
-        dlURL: `/garbage.php`,
-        ulURL: `/empty.php`,
-        pingURL: `/empty.php`,
-        getIpURL: `/getIP.php`,
+        server: `https://speed.${location}-static-${sample(hosts)}.cdntogo.net/speedtest/`,
+        dlURL: `garbage.php`,
+        ulURL: `empty.php`,
+        pingURL: `empty.php`,
+        getIpURL: `getIP.php`,
       })),
-    [data?.items],
+    [],
   );
   const workers = useMemo(() => {
     // @ts-expect-error
@@ -134,10 +143,10 @@ const SpeedView: React.FC = () => {
       )}
 
       <div className="flex justify-around">
-        {map(data?.items, (location) => (
-          <div className={`flex flex-col items-center w-1/${data?.items.length}`} key={location.id}>
-            <Text>{location.name}</Text>
-            {speed[location.location] || '0.00'}
+        {map(SPEEDTEST_SERVERS, ({ name, location }) => (
+          <div className="flex flex-col items-center w-1/2" key={location}>
+            <Text>{name}</Text>
+            {speed[location] || '0.00'}
             <Text>Mbit/s</Text>
           </div>
         ))}
